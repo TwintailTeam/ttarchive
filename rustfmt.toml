@@ -1,0 +1,10 @@
+max_width = 160
+use_small_heuristics = "Max"
+fn_single_line = true
+where_single_line = true
+match_arm_blocks = true
+overflow_delimited_expr = true
+use_field_init_shorthand = true
+condense_wildcard_suffixes = true
+empty_item_single_line = true
+style_edition = "2024"
