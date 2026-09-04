@@ -20,18 +20,11 @@ const RLE_BLOCK: u32 = 1;
 const COMPRESSED_BLOCK: u32 = 2;
 
 const WINDOW_LOG: u32 = 23;
-/// How far back a match may reach, and so how much input a streaming writer holds.
 pub const WINDOW_SIZE: usize = 1 << WINDOW_LOG;
 
 const MAX_PREDEFINED_OFFSET_CODE: u32 = 28;
 
 const MIN_MATCH: usize = 3;
-
-/// How fast the search gives up on a stretch that keeps yielding literals.
-///
-/// After enough misses in a row the encoder starts stepping over positions
-/// rather than searching every one, which is what keeps incompressible input
-/// from costing a full hash chain walk per byte. Any match resets it.
 const SKIP_SHIFT: u32 = 6;
 const HASH_LOG: u32 = 17;
 const NO_POSITION: u32 = u32::MAX;
@@ -381,11 +374,6 @@ fn tokenise(feed: &Feed, start: usize, finder: &mut Finder, literals: &mut Vec<u
     at
 }
 
-/// A Zstandard frame written as its input arrives.
-///
-/// The frame header says the content size is unknown, since it is; blocks go
-/// out as each fills, and an empty final block closes the frame. Only the last
-/// window of input is held, so memory does not follow the input size.
 pub struct Writer<W: Write> {
     out: W,
     tables: Predefined,
@@ -399,7 +387,6 @@ pub struct Writer<W: Write> {
 }
 
 impl<W: Write> Writer<W> {
-    /// Start a frame, searching `depth` candidates per position.
     pub fn new(mut out: W, checksum: bool, depth: usize) -> Result<Self> {
         let mut header = Vec::with_capacity(8);
         header.extend_from_slice(&MAGIC);
@@ -420,7 +407,6 @@ impl<W: Write> Writer<W> {
         })
     }
 
-    /// Hand over more input, encoding whatever has become complete.
     pub fn push(&mut self, bytes: &[u8]) -> Result<()> {
         self.digest.update(bytes);
         self.window.push(bytes);
@@ -433,7 +419,6 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    /// Encode what is left, close the frame and give back the writer.
     pub fn finish(mut self) -> Result<W> {
         while self.at < self.window.end() {
             self.block()?;
@@ -482,12 +467,10 @@ impl<W: Write> Writer<W> {
     }
 }
 
-/// Compress into a Zstandard frame.
 pub fn compress(data: &[u8], checksum: bool) -> Result<Vec<u8>> {
     compress_at(data, checksum, DEFAULT_DEPTH)
 }
 
-/// Compress with a given match finder depth: higher searches harder.
 pub fn compress_at(data: &[u8], checksum: bool, depth: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(data.len() / 3 + 64);
     write_frame_header(&mut out, data.len() as u64, checksum);

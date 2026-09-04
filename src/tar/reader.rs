@@ -35,8 +35,6 @@ impl TarEntry {
         }
     }
 
-    /// Whether the body has to be assembled from a sparse map rather than
-    /// copied straight out.
     pub fn is_sparse(&self) -> bool {
         self.sparse.as_ref().is_some_and(|map| !map.is_empty() || map.in_data)
     }
@@ -124,7 +122,6 @@ impl<R: Read> TarReader<R> {
         Ok(())
     }
 
-    /// Read the next entry header, leaving the reader positioned at its data.
     pub fn next_entry(&mut self) -> Result<Option<TarEntry>> {
         if self.finished {
             return Ok(None);
@@ -273,12 +270,6 @@ impl<R: Read> TarReader<R> {
         })
     }
 
-    /// Copy the current entry's data into `out`, then advance past its padding.
-    ///
-    /// Nothing larger than `buffer` is held, so an entry of any size can be
-    /// written straight to disk. `on_bytes` is called with each chunk's length
-    /// as it is written. A sparse entry has to be assembled from its map, so
-    /// use [`TarReader::read_data`] for those.
     pub fn copy_data<W: Write>(&mut self, entry: &TarEntry, out: &mut W, buffer: &mut [u8], mut on_bytes: impl FnMut(u64)) -> Result<u64> {
         if !entry.kind.carries_data() {
             return Ok(0);
@@ -301,7 +292,6 @@ impl<R: Read> TarReader<R> {
         Ok(stored)
     }
 
-    /// Read the current entry's data, then advance past its block padding.
     pub fn read_data(&mut self, entry: &TarEntry) -> Result<Vec<u8>> {
         let stored = entry.stored_size();
 
@@ -325,7 +315,6 @@ impl<R: Read> TarReader<R> {
         }
     }
 
-    /// Advance past the current entry's data without decoding it.
     pub fn skip_data(&mut self, entry: &TarEntry) -> Result<()> {
         if !entry.kind.carries_data() {
             return Ok(());

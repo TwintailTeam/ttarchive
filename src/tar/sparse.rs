@@ -11,11 +11,7 @@ pub struct Segment {
 pub struct Map {
     pub segments: Vec<Segment>,
     pub real_size: u64,
-    /// The map is at the front of the entry's data rather than in a header,
-    /// which is how PAX 1.0 records it.
     pub in_data: bool,
-    /// Bytes actually stored for the entry, map included. Only meaningful when
-    /// the map is in the data, where the segments cannot say.
     pub stored: u64,
 }
 
@@ -43,12 +39,6 @@ impl Map {
     }
 }
 
-/// Read a PAX sparse map, whichever of the three GNU layouts it uses.
-///
-/// 0.0 repeats `GNU.sparse.offset` and `GNU.sparse.numbytes`; 0.1 packs the
-/// same pairs into one comma-separated `GNU.sparse.map`; 1.0 keeps the map at
-/// the front of the entry's own data, so this only reports that it is there and
-/// [`from_data`] reads it.
 pub fn from_pax(attributes: &Attributes) -> Result<Option<Map>> {
     if attributes.number("GNU.sparse.major") == Some(1) {
         let real_size = attributes.number("GNU.sparse.realsize").ok_or_else(|| Error::malformed("a PAX 1.0 sparse entry gives no real size"))?;
@@ -103,11 +93,6 @@ fn numbers_of(attributes: &Attributes, key: &str) -> Result<Vec<u64>> {
         .collect()
 }
 
-/// Read a PAX 1.0 map, which lives at the front of the entry's data.
-///
-/// The map is decimal numbers separated by newlines — a count, then that many
-/// offset and length pairs — padded out to a whole number of blocks. Returns
-/// the map and how many bytes of the entry it occupied.
 pub fn from_data(data: &[u8], real_size: u64) -> Result<(Map, usize)> {
     let mut at = 0usize;
     let mut next = || -> Result<u64> {
@@ -141,11 +126,6 @@ const BLOCK: usize = 512;
 
 const MIN_HOLE: usize = BLOCK;
 
-/// Find the runs of real data in `data`, treating long runs of zeros as holes.
-///
-/// This looks at the bytes rather than asking the file system, so it finds
-/// holes in any file, and finds them the same way on every platform. A file
-/// with nothing to skip yields one segment covering all of it.
 pub fn scan(data: &[u8]) -> Map {
     let mut segments: Vec<Segment> = Vec::new();
     let mut at = 0usize;
@@ -179,8 +159,6 @@ fn zeros_from(data: &[u8], at: usize) -> usize {
     data[at..].iter().take_while(|&&b| b == 0).count()
 }
 
-/// Encode a map the way PAX 1.0 wants it: decimal numbers separated by
-/// newlines at the front of the entry's data, padded out to whole blocks.
 pub fn to_data(map: &Map) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(map.segments.len().to_string().as_bytes());
@@ -197,7 +175,6 @@ pub fn to_data(map: &Map) -> Vec<u8> {
     out
 }
 
-/// Copy out only the bytes a map's segments cover.
 pub fn gather(map: &Map, data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(map.stored_size() as usize);
     for segment in &map.segments {
@@ -207,16 +184,11 @@ pub fn gather(map: &Map, data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Whether storing `data` as a sparse entry would actually save anything.
 pub fn worth_it(map: &Map, data: &[u8]) -> bool {
     let stored = map.stored_size() as usize + to_data(map).len();
     stored + BLOCK < data.len()
 }
 
-/// Read the sparse map an old GNU `S` header carries in its own bytes.
-///
-/// Four segments sit in the header at 386, and byte 482 says whether more
-/// follow in extension blocks of twenty-one segments each.
 pub fn from_gnu_header(header: &[u8; BLOCK]) -> Result<(Map, bool)> {
     let real_size = crate::tar::header::parse_numeric(&header[483..495], "gnu sparse real size").unwrap_or(0);
 
@@ -227,7 +199,6 @@ pub fn from_gnu_header(header: &[u8; BLOCK]) -> Result<(Map, bool)> {
     Ok((map, header[482] != 0))
 }
 
-/// Read the segments in one old GNU extension block, and whether more follow.
 pub fn from_gnu_extension(block: &[u8; BLOCK], map: &mut Map) -> Result<bool> {
     take_segments(&block[..504], &mut map.segments)?;
     Ok(block[504] != 0)

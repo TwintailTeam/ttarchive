@@ -51,7 +51,6 @@ impl<W: Write> TarWriter<W> {
         self.pad_to_block(payload.len() as u64)
     }
 
-    /// Write one entry header, followed by `size` bytes the caller then streams.
     pub fn start_entry(&mut self, name: &str, meta: &EntryMeta, size: u64, linkname: &str) -> Result<()> {
         let kind = match meta.kind {
             EntryKind::Directory => Kind::Directory,
@@ -62,8 +61,6 @@ impl<W: Write> TarWriter<W> {
         self.write_header(name, meta, size, linkname, kind)
     }
 
-    /// Write a hard link to `linkname`, which names another entry in this
-    /// archive rather than a path on disk. Hard links carry no data.
     pub fn add_hard_link(&mut self, name: &str, meta: &EntryMeta, linkname: &str) -> Result<()> {
         self.write_header(name, meta, 0, linkname, Kind::HardLink)
     }
@@ -118,11 +115,6 @@ impl<W: Write> TarWriter<W> {
         self.emit(&header::write(&head))
     }
 
-    /// Write a file whose long runs of zeros are recorded as holes rather than
-    /// stored, using the PAX 1.0 layout: the map sits at the front of the
-    /// entry's data and the real name and size travel as attributes.
-    ///
-    /// Falls back to an ordinary entry when the holes would not pay for the map.
     pub fn add_sparse(&mut self, name: &str, meta: &EntryMeta, data: &[u8]) -> Result<bool> {
         let map = sparse::scan(data);
         if !sparse::worth_it(&map, data) {
@@ -162,12 +154,10 @@ impl<W: Write> TarWriter<W> {
         Ok(true)
     }
 
-    /// Write entry data. Must total the `size` given to [`TarWriter::start_entry`].
     pub fn write_data(&mut self, data: &[u8]) -> Result<()> {
         self.emit(data)
     }
 
-    /// Pad the entry just written out to a block boundary.
     pub fn finish_entry(&mut self, size: u64) -> Result<()> {
         self.pad_to_block(size)
     }
@@ -181,7 +171,6 @@ impl<W: Write> TarWriter<W> {
         Ok(())
     }
 
-    /// Write the two zero blocks that end a tar stream.
     pub fn finish(mut self) -> Result<W> {
         self.emit(&[0u8; BLOCK * 2])?;
 

@@ -36,8 +36,6 @@ impl<R: Read> Lzma2Decoder<R> {
         Lzma2Decoder { inner, core: None, window: Window::new(dict_size as usize), props: None, dict_size, started: false, finished: false }
     }
 
-    /// Take the reader back. The decoder consumes the LZMA2 stream exactly, so
-    /// the reader is left on the byte after it.
     pub fn into_inner(self) -> R {
         self.inner
     }
@@ -153,12 +151,6 @@ const MAX_PACKED: usize = 1 << 16;
 
 const RESERVE: usize = MATCH_MAX_LEN as usize + 1;
 
-/// An LZMA2 stream written as its input arrives.
-///
-/// Chunks share one dictionary and one probability model: only the first chunk
-/// resets the dictionary, and the model carries over unless a chunk had to be
-/// stored uncompressed, which forces the decoder to drop its state. Only the
-/// last dictionary of input is held, so memory does not follow the input size.
 pub struct Writer<W: Write> {
     out: W,
     encoder: Encoder,
@@ -172,8 +164,6 @@ pub struct Writer<W: Write> {
 }
 
 impl<W: Write> Writer<W> {
-    /// Start a stream. `expected` sizes the match chain and may be
-    /// `usize::MAX` when the length is not known ahead of time.
     pub fn new(out: W, props: Properties, depth: usize, expected: usize) -> Self {
         let dict = props.dict_size as usize;
 
@@ -190,13 +180,11 @@ impl<W: Write> Writer<W> {
         }
     }
 
-    /// Hand over more input, encoding whatever has become complete.
     pub fn push(&mut self, bytes: &[u8]) -> Result<()> {
         self.window.push(bytes);
         self.drain(false)
     }
 
-    /// Encode what is left, close the stream and give back the writer.
     pub fn finish(mut self) -> Result<W> {
         self.drain(true)?;
         self.out.write_all(&[CONTROL_END])?;
@@ -272,14 +260,12 @@ impl<W: Write> Writer<W> {
     }
 }
 
-/// Encode a full LZMA2 stream.
 pub fn compress(data: &[u8], props: Properties, depth: usize) -> Result<Vec<u8>> {
     let mut writer = Writer::new(Vec::with_capacity(data.len() / 3 + 64), props, depth, data.len());
     writer.push(data)?;
     writer.finish()
 }
 
-/// The smallest dictionary size code that covers `wanted`.
 pub fn dictionary_code(wanted: u32) -> u8 {
     for byte in 0..=40u8 {
         if dictionary_size(byte).is_ok_and(|size| size >= wanted) {

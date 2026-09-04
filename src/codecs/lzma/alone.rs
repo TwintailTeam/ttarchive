@@ -8,10 +8,6 @@ pub const HEADER_LEN: usize = 13;
 
 const UNKNOWN_SIZE: u64 = u64::MAX;
 
-/// A bare `.lzma` stream: five property bytes then an eight byte size.
-///
-/// This is the LZMA_Alone container, not the four byte framing a ZIP entry puts
-/// in front of the same property bytes.
 pub fn reader<R: Read>(mut input: R) -> Result<LzmaDecoder<R>> {
     let mut header = [0u8; HEADER_LEN];
     input.read_exact(&mut header).map_err(|e| {
@@ -45,20 +41,10 @@ pub fn is_alone(prefix: &[u8]) -> bool {
 
 const DEFAULT_PROPS: Properties = Properties { lc: 3, lp: 0, pb: 2, dict_size: 1 << 23 };
 
-/// Write a `.lzma` (LZMA_Alone) stream: five property bytes, an eight byte size,
-/// then the raw stream.
-///
-/// The dictionary size written is the one actually used, after clamping, so a
-/// decoder sizes its window the same way this encoder did.
 pub fn compress(data: &[u8], depth: usize) -> Result<Vec<u8>> {
     compress_at(data, depth, crate::codecs::Level::Default)
 }
 
-/// A `.lzma` stream written as its input arrives.
-///
-/// The size field says unknown and the stream ends with a marker, because the
-/// length is only known once the last byte has gone by. Memory is one
-/// dictionary, not one archive.
 pub struct Writer<W: Write> {
     coder: encode::RangeEncoder<W>,
     encoder: encode::Encoder,
@@ -69,7 +55,6 @@ pub struct Writer<W: Write> {
 }
 
 impl<W: Write> Writer<W> {
-    /// Start a stream with a dictionary sized for `level`.
     pub fn new(mut out: W, depth: usize, level: crate::codecs::Level) -> Result<Self> {
         let dict = encode::dictionary_at(usize::MAX, level);
         let props = Properties::from_byte(encode::properties_byte(DEFAULT_PROPS), dict)?;
@@ -90,13 +75,11 @@ impl<W: Write> Writer<W> {
         })
     }
 
-    /// Hand over more input, encoding whatever has become complete.
     pub fn push(&mut self, bytes: &[u8]) -> Result<()> {
         self.window.push(bytes);
         self.drain(false)
     }
 
-    /// Encode what is left, mark the end and give back the writer.
     pub fn finish(mut self) -> Result<W> {
         self.drain(true)?;
         let at = self.at;
@@ -125,7 +108,6 @@ impl<W: Write> Writer<W> {
     }
 }
 
-/// Compress with a dictionary sized for `level`.
 pub fn compress_at(data: &[u8], depth: usize, level: crate::codecs::Level) -> Result<Vec<u8>> {
     let dict = encode::dictionary_at(data.len(), level);
     let properties = Properties::from_byte(encode::properties_byte(DEFAULT_PROPS), dict)?;

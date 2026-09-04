@@ -135,17 +135,9 @@ impl Table {
     }
 }
 
-/// The most symbols a table can describe with plain four bit weights.
-///
-/// The description writes one weight per symbol below the last one, and its
-/// header can only count to 128 of them. Beyond that the weights themselves
-/// have to be FSE coded, which this encoder does not do, so a block whose
-/// literals reach that far is stored raw instead.
 pub const MAX_DIRECT_SYMBOLS: usize = 129;
 
 impl Table {
-    /// Build a table over the symbols `freqs` counts, or `None` when the
-    /// literals cannot be described with direct weights.
     pub fn build(freqs: &[u32; SYMBOLS]) -> Option<Vec<u8>> {
         let highest = freqs.iter().rposition(|&f| f > 0)?;
         if highest >= MAX_DIRECT_SYMBOLS {
@@ -165,11 +157,6 @@ impl Table {
         Some(weights)
     }
 
-    /// The code for every symbol, as (value, bit count), from a weight list.
-    ///
-    /// Codes are canonical: symbols are ordered by weight, heaviest first, and
-    /// within a weight by symbol number, which is the order the decoder's table
-    /// is filled in.
     pub fn codes(weights: &[u8]) -> Result<Vec<(u16, u8)>> {
         let table = Table::from_complete(weights)?;
 
@@ -204,7 +191,6 @@ impl Table {
         Ok(codes)
     }
 
-    /// Write a weight list in the plain four bit form.
     pub fn describe(weights: &[u8]) -> Vec<u8> {
         let count = weights.len() - 1;
         let mut out = Vec::with_capacity(2 + count / 2);

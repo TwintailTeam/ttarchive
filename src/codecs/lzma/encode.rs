@@ -20,11 +20,6 @@ const HASH_BITS: u32 = 18;
 const HASH_SIZE: usize = 1 << HASH_BITS;
 const NONE: u32 = u32::MAX;
 
-/// How fast the search gives up on a stretch that keeps yielding literals.
-///
-/// After enough literals in a row the encoder searches only every other
-/// position, then every third, and so on, which is what keeps incompressible
-/// input from costing a full hash chain walk per byte. Any match resets it.
 const SKIP_SHIFT: u32 = 6;
 
 pub struct RangeEncoder<W> {
@@ -36,7 +31,6 @@ pub struct RangeEncoder<W> {
 }
 
 impl<W: Write> RangeEncoder<W> {
-    /// Start coding into `out`.
     pub fn new(out: W) -> Self {
         RangeEncoder { out, low: 0, range: u32::MAX, cache: 0, pending: 1 }
     }
@@ -117,7 +111,6 @@ impl<W: Write> RangeEncoder<W> {
         Ok(())
     }
 
-    /// Flush the last bytes and give the writer back.
     pub fn finish(mut self) -> Result<W> {
         for _ in 0..5 {
             self.shift_low()?;
@@ -404,28 +397,17 @@ impl Encoder {
         best
     }
 
-    /// Compress `data` into a raw LZMA stream, without any container framing.
     pub fn encode<W: Write>(&mut self, data: &[u8], out: W, depth: usize) -> Result<W> {
         let mut finder = Finder::new(data.len(), self.props.dict_size as usize, depth);
         self.encode_range(&Feed::whole(data), 0, data.len(), &mut finder, out)
     }
 
-    /// Compress `feed[from..to]` as one range-coded stream.
-    ///
-    /// Matches may reach back before `from`, so successive calls share one
-    /// dictionary; the model and rep distances carry over unless reset by the
-    /// caller. This is what lets LZMA2 chunk without losing context.
     pub fn encode_range<W: Write>(&mut self, feed: &Feed, from: usize, to: usize, finder: &mut Finder, out: W) -> Result<W> {
         let mut rc = RangeEncoder::new(out);
         self.encode_span(feed, from, to, finder, &mut rc)?;
         rc.finish()
     }
 
-    /// Compress `feed[from..to]` into a range coder that outlives the call.
-    ///
-    /// A container that frames each chunk separately wants
-    /// [`Encoder::encode_range`]; one long stream wants this, so the coder is
-    /// flushed once at the end.
     pub fn encode_span<W: Write>(&mut self, feed: &Feed, from: usize, to: usize, finder: &mut Finder, rc: &mut RangeEncoder<W>) -> Result<()> {
         let pos_mask = (1u32 << self.props.pb) - 1;
         let mut at = from;
@@ -523,10 +505,6 @@ impl Encoder {
         Ok(())
     }
 
-    /// Encode the marker that tells a decoder the stream ends here.
-    ///
-    /// A container that records the uncompressed size does not need it; one
-    /// that writes the size as unknown does.
     pub fn encode_end_marker<W: Write>(&mut self, at: usize, rc: &mut RangeEncoder<W>) -> Result<()> {
         let pos_state = ((at as u32) & ((1u32 << self.props.pb) - 1)) as usize;
         let match_index = (self.state << MAX_POS_BITS) + pos_state;
@@ -539,16 +517,10 @@ impl Encoder {
     }
 }
 
-/// Choose a dictionary size, clamped to what the format and decoder accept.
 pub fn dictionary_for(len: usize) -> u32 {
     dictionary_at(len, Level::Default)
 }
 
-/// Choose a dictionary size for a level, clamped to what the format accepts.
-///
-/// A larger dictionary finds more distant matches but costs four bytes of
-/// match chain per byte it spans, so the level decides how much of that to
-/// spend. The default matches what `xz -6` uses.
 pub fn dictionary_at(len: usize, level: Level) -> u32 {
     let ceiling = match level {
         Level::None | Level::Fast => 1 << 20,
@@ -563,7 +535,6 @@ pub fn properties_byte(props: Properties) -> u8 {
     ((props.pb * 5 + props.lp) * 9 + props.lc) as u8
 }
 
-/// Compress into a raw LZMA stream using the default lc/lp/pb.
 pub fn compress_raw(data: &[u8], props: Properties, depth: usize) -> Result<Vec<u8>> {
     let mut encoder = Encoder::new(props);
     encoder.encode(data, Vec::new(), depth)

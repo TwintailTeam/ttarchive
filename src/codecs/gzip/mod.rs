@@ -97,7 +97,6 @@ fn parse_header(data: &[u8]) -> Result<Header> {
     Ok(Header { member, len: at })
 }
 
-/// The header of the first member, carrying the original name when one was stored.
 pub fn read_member(data: &[u8]) -> Result<Member> {
     parse_header(data).map(|header| header.member)
 }
@@ -107,7 +106,6 @@ fn take_cstring(data: &[u8], at: usize, what: &str) -> Result<(Vec<u8>, usize)> 
     Ok((data[at..at + end].to_vec(), at + end + 1))
 }
 
-/// Decode every member of a gzip stream, concatenating their contents.
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(size_hint);
     let mut at = 0usize;
@@ -194,7 +192,6 @@ fn write_header(out: &mut Vec<u8>, member: &Member) {
     }
 }
 
-/// Streaming gzip writer: deflate plus the header and CRC-32/ISIZE trailer.
 pub struct GzipEncoder<W: Write> {
     inner: Option<DeflateEncoder<W>>,
     crc: Crc32,
@@ -291,10 +288,6 @@ impl<R: Read> Read for Feed<R> {
     }
 }
 
-/// Streaming gzip reader across every member of the stream.
-///
-/// Nothing larger than one inflate window is held at a time, so an archive of
-/// any size decodes in constant memory.
 pub struct GzipReader<R> {
     stage: Stage<R>,
     crc: crate::utils::crc32::Crc32,

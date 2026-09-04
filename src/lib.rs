@@ -72,8 +72,8 @@ pub enum ArchiveType {
     TarLz,
 }
 
-const ZIP_SUFFIXES: [&str; 17] =
-    [".zip", ".zipx", ".krzip", ".jar", ".war", ".ear", ".apk", ".epub", ".odt", ".ods", ".odp", ".docx", ".xlsx", ".pptx", ".whl", ".crx", ".xpi"];
+const ZIP_SUFFIXES: [&str; 18] =
+    [".zip", ".zipx", ".krzip", ".gf", ".jar", ".war", ".ear", ".apk", ".epub", ".odt", ".ods", ".odp", ".docx", ".xlsx", ".pptx", ".whl", ".crx", ".xpi"];
 
 const TARBALL_SUFFIXES: [(&str, ArchiveType); 21] = [
     (".tar.gz", ArchiveType::TarGz),

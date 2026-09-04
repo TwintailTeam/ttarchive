@@ -106,12 +106,6 @@ impl Lzw {
 
 const PRODUCE: usize = 64 * 1024;
 
-/// LZW as `compress(1)` writes it, decoded as it is read.
-///
-/// Distinct from the ZIP shrink codec: codes are packed least significant bit
-/// first, the width grows on a fixed schedule rather than by an explicit signal,
-/// and after a clear the encoder pads to a whole group of codes. Only the
-/// dictionary is held, so the stream decodes in bounded memory.
 pub struct Reader<R> {
     inner: R,
     state: Option<Lzw>,
@@ -124,7 +118,6 @@ pub struct Reader<R> {
 }
 
 impl<R: Read> Reader<R> {
-    /// Wrap `inner` at the start of a `compress(1)` stream.
     pub fn new(inner: R) -> Self {
         Reader { inner, state: None, input: Vec::new(), bit_pos: 0, dropped_bits: 0, out: Vec::new(), read: 0, finished: false }
     }
@@ -219,7 +212,6 @@ impl<R: Read> Read for Reader<R> {
     }
 }
 
-/// Decode a whole `compress(1)` stream.
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(size_hint.min(256 << 20));
     Reader::new(data).read_to_end(&mut out)?;

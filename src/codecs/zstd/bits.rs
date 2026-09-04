@@ -67,12 +67,6 @@ impl<'a> BackwardBits<'a> {
     }
 }
 
-/// The writer that feeds [`BackwardBits`].
-///
-/// Bits pile up towards the top of the stream and whole bytes drop out from the
-/// bottom, so the reader starting at the last byte sees them in the reverse of
-/// the order they were added. A closing one bit marks where the final byte's
-/// payload stops, which is how the reader finds its starting point.
 #[derive(Default)]
 pub struct BitWriter {
     out: Vec<u8>,
@@ -85,8 +79,6 @@ impl BitWriter {
         BitWriter::default()
     }
 
-    /// Add the low `count` bits of `value`. The reader gets them back from a
-    /// single `bits(count)` call, but only after everything added later.
     pub fn add(&mut self, value: u64, count: u32) {
         if count == 0 {
             return;
@@ -103,7 +95,6 @@ impl BitWriter {
         }
     }
 
-    /// Close the stream with its marker bit.
     pub fn finish(mut self) -> Vec<u8> {
         self.add(1, 1);
         if self.held > 0 {

@@ -42,12 +42,6 @@ enum Stage<R> {
     Done,
 }
 
-/// A PPMd entry decoded as it is read.
-///
-/// The compressed input and the decoded output both pass through a symbol at a
-/// time. The model itself is as large as the entry asked for — up to 256 MiB —
-/// and is held for as long as the entry is being read; that is inherent to
-/// PPMd, so this bounds what it holds beyond the model, not the model.
 pub struct Reader<R> {
     stage: Stage<R>,
     expected: u64,
@@ -55,7 +49,6 @@ pub struct Reader<R> {
 }
 
 impl<R: Read> Reader<R> {
-    /// Wrap `inner` at the start of a PPMd entry `expected` bytes long.
     pub fn new(inner: R, expected: u64) -> Self {
         Reader { stage: Stage::Start(inner), expected, produced: 0 }
     }

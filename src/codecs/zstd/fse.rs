@@ -162,12 +162,6 @@ impl State {
     }
 }
 
-/// A decode table read the other way round.
-///
-/// FSE encodes a symbol run backwards: the state that follows a symbol is
-/// already fixed, and the encoder picks the state that leads to it. Every
-/// decode entry covers the successors `[base, base + 2^bits)`, and for one
-/// symbol those ranges tile the whole table, so exactly one state always fits.
 pub struct EncTable {
     table: Table,
     size: usize,
@@ -208,14 +202,10 @@ impl EncTable {
         }
     }
 
-    /// The state to start from, which is the one the last symbol of the run
-    /// decodes from. Any state carrying the symbol works, since the decoder
-    /// only reads it back as a plain table index.
     pub fn start(&self, symbol: u8) -> Result<usize> {
         self.table.entries.iter().position(|e| e.symbol == symbol).ok_or_else(|| Error::malformed(format!("zstd FSE table cannot encode symbol {symbol}")))
     }
 
-    /// Emit `symbol`, stepping the state back towards the start of the run.
     pub fn encode(&self, state: &mut usize, symbol: u8, out: &mut BitWriter) -> Result<()> {
         let lead = self.lead(symbol, *state)?;
         let entry = self.table.entries[lead];
@@ -224,7 +214,6 @@ impl EncTable {
         Ok(())
     }
 
-    /// Write the state the decoder starts from.
     pub fn flush(&self, state: usize, out: &mut BitWriter) {
         out.add(state as u64, self.table.log);
     }

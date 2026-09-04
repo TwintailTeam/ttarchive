@@ -63,7 +63,6 @@ fn block_header(dict_code: u8) -> Vec<u8> {
     header
 }
 
-/// Compress into a single-block xz stream with a CRC-64 check.
 pub fn compress(data: &[u8], props: Properties, depth: usize) -> Result<Vec<u8>> {
     let payload = lzma2::compress(data, props, depth)?;
     let dict_code = lzma2::dictionary_code(props.dict_size);
@@ -127,12 +126,6 @@ impl<W: Write> Write for Counted<W> {
     }
 }
 
-/// A single-block xz stream written as its input arrives.
-///
-/// The block header leaves out the optional size fields, so nothing has to be
-/// known in advance; the index and footer are written from running totals once
-/// the input ends. One block keeps matches reaching across the whole stream,
-/// which several blocks would not.
 pub struct Writer<W: Write> {
     inner: lzma2::Writer<Counted<W>>,
     check: Crc64,
@@ -141,7 +134,6 @@ pub struct Writer<W: Write> {
 }
 
 impl<W: Write> Writer<W> {
-    /// Start a stream with a dictionary sized for `level`.
     pub fn new(mut out: W, depth: usize, level: crate::codecs::Level) -> Result<Self> {
         let dict = crate::codecs::lzma::encode::dictionary_at(usize::MAX, level);
         let props = Properties { lc: 3, lp: 0, pb: 2, dict_size: dict };
@@ -157,14 +149,12 @@ impl<W: Write> Writer<W> {
         Ok(Writer { inner: lzma2::Writer::new(counted, props, depth, usize::MAX), check: Crc64::new(), uncompressed: 0, header_len })
     }
 
-    /// Hand over more input, encoding whatever has become complete.
     pub fn push(&mut self, bytes: &[u8]) -> Result<()> {
         self.check.update(bytes);
         self.uncompressed += bytes.len() as u64;
         self.inner.push(bytes)
     }
 
-    /// Close the block, write the index and footer, and give back the writer.
     pub fn finish(self) -> Result<W> {
         let Writer { inner, check, uncompressed, header_len } = self;
 
@@ -208,12 +198,10 @@ impl<W: Write> Writer<W> {
     }
 }
 
-/// Compress with the crate's default LZMA properties.
 pub fn compress_default(data: &[u8], depth: usize) -> Result<Vec<u8>> {
     compress_at(data, depth, crate::codecs::Level::Default)
 }
 
-/// Compress with a dictionary sized for `level`.
 pub fn compress_at(data: &[u8], depth: usize, level: crate::codecs::Level) -> Result<Vec<u8>> {
     let dict = crate::codecs::lzma::encode::dictionary_at(data.len(), level);
     let props = Properties { lc: 3, lp: 0, pb: 2, dict_size: dict };

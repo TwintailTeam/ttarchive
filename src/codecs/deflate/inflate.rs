@@ -126,13 +126,6 @@ impl<R: Read> InflateReader<R> {
         self.inner
     }
 
-    /// Take the reader back along with the bytes it read past the stream.
-    ///
-    /// The bit reader buffers ahead, so a caller that has more to parse after
-    /// the deflate data — a gzip trailer, then perhaps another member — needs
-    /// those bytes handed back rather than lost. The partial byte the stream
-    /// stopped inside is dropped, since deflate data is followed by padding to
-    /// the next byte boundary.
     pub fn into_parts(mut self) -> (R, Vec<u8>) {
         let partial = self.bit_count % 8;
         self.bit_buf >>= partial;
@@ -153,10 +146,6 @@ impl<R: Read> InflateReader<R> {
         self.state == State::Done && self.out_read == self.out_len
     }
 
-    /// Bytes of the compressed input the deflate stream actually used.
-    ///
-    /// A gzip or zlib wrapper needs this to find its trailer, since the reader
-    /// buffers ahead and may hold bytes belonging to whatever follows.
     pub fn consumed(&self) -> usize {
         self.in_total - (self.in_end - self.in_pos) - (self.bit_count / 8) as usize
     }

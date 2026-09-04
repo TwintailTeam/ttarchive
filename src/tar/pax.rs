@@ -37,10 +37,6 @@ impl Attributes {
         self.fields.insert(key.to_owned(), value);
     }
 
-    /// Every value recorded for `key`, in the order they appeared.
-    ///
-    /// PAX normally lets a later record replace an earlier one, but the 0.0
-    /// sparse format repeats its keys and means all of them.
     pub fn all(&self, key: &str) -> impl Iterator<Item = &[u8]> {
         self.records.iter().filter(move |(k, _)| k == key).map(|(_, v)| v.as_slice())
     }

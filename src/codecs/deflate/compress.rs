@@ -448,7 +448,6 @@ impl<W: Write> DeflateEncoder<W> {
         DeflateEncoder { inner, level, blocks: BlockWriter::new(level), pending: Vec::with_capacity(BLOCK_SIZE), written: 0 }
     }
 
-    /// Finish the stream and hand back the underlying writer.
     pub fn finish_inner(mut self) -> Result<W> {
         let block = std::mem::take(&mut self.pending);
         let level = self.level;

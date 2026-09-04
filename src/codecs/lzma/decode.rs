@@ -268,15 +268,10 @@ pub struct LzmaDecoder<R> {
 }
 
 impl<R: Read> LzmaDecoder<R> {
-    /// Bytes of the compressed input the stream actually used.
-    ///
-    /// A container with a trailer, such as lzip, needs this to find it, since the
-    /// range decoder buffers ahead of what it consumes.
     pub fn consumed(&self) -> usize {
         self.rc.consumed()
     }
 
-    /// Take the reader back along with the bytes the range decoder read ahead.
     pub fn into_parts(self) -> (R, Vec<u8>) {
         self.rc.into_parts()
     }

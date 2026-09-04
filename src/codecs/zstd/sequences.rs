@@ -95,12 +95,8 @@ fn take_table(mode: Mode, data: &[u8], offset: &mut usize, kept: &mut Option<Tab
     Ok(())
 }
 
-/// Where a block's output goes and how far back it may reach.
 pub struct Target<'a> {
-    /// The frame's output, appended to. Its history starts where the frame did,
-    /// which is what bounds how far a match may reach.
     pub out: &'a mut Window,
-    /// The declared window, or zero when the frame set none.
     pub window_size: u64,
 }
 

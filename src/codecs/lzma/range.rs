@@ -49,7 +49,6 @@ impl<R: Read> RangeDecoder<R> {
         self.code == 0
     }
 
-    /// Bytes pulled from the inner reader that the decoder has actually used.
     pub fn consumed(&self) -> usize {
         HEADER_LEN + self.total - (self.filled - self.pos)
     }
@@ -58,10 +57,6 @@ impl<R: Read> RangeDecoder<R> {
         self.inner
     }
 
-    /// Take the reader back along with the bytes read ahead of what was used.
-    ///
-    /// A container with a trailer after the stream has to put these back before
-    /// it can read it.
     pub fn into_parts(self) -> (R, Vec<u8>) {
         let leftover = self.data[self.pos..self.filled].to_vec();
         (self.inner, leftover)

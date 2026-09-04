@@ -9,36 +9,25 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// An underlying I/O failure.
     Io(io::Error),
-
     /// The byte stream is not a well-formed archive of the expected format.
     Malformed { detail: String, at: Option<u64> },
-
     /// The archive is well formed but uses a feature this crate does not implement.
     Unsupported(Unsupported),
-
     /// A stored checksum did not match the data that was actually read.
     ChecksumMismatch { entry: String, expected: u32, found: u32 },
-
     /// A decompressed entry did not have the length its metadata promised.
     SizeMismatch { entry: String, expected: u64, found: u64 },
-
     /// An entry name would escape the extraction directory, or is otherwise unsafe.
     UnsafeEntryPath { name: String, reason: PathRejection },
-
     /// The archive format could not be determined from magic bytes or extension.
     UnknownFormat { path: Option<PathBuf> },
-
     /// A worker thread panicked during parallel processing.
     WorkerPanic,
-
     /// The entry is encrypted and no password was supplied.
     PasswordRequired { entry: String },
-
     /// The supplied password is wrong.
     WrongPassword,
-
-    /// An encrypted entry failed its authentication check, having been modified
-    /// or truncated after it was written.
+    /// An encrypted entry failed its authentication check, having been modified or truncated after it was written.
     AuthenticationFailed,
 }
 

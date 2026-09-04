@@ -119,7 +119,6 @@ struct Frame {
     repeats: [u32; 3],
 }
 
-/// Decode every frame in a Zstandard stream.
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(size_hint.min(64 << 20));
     Reader::new(data, size_hint as u64).read_to_end(&mut out)?;
@@ -136,11 +135,6 @@ struct Open {
     frame: Frame,
 }
 
-/// A Zstandard stream decoded as it is read.
-///
-/// Only the frame's declared window is held, so a stream decodes in bounded
-/// memory however long it is. Frames that follow one another are all decoded,
-/// which is what `zstd` itself produces when its output is concatenated.
 pub struct Reader<R> {
     inner: R,
     window: Window,
@@ -149,7 +143,6 @@ pub struct Reader<R> {
 }
 
 impl<R: Read> Reader<R> {
-    /// Wrap `inner`. The hint only sizes the first allocation.
     pub fn new(inner: R, _size_hint: u64) -> Self {
         Reader { inner, window: Window::new(1 << 20), open: None, finished: false }
     }

@@ -87,17 +87,11 @@ enum Stage<R> {
     Done,
 }
 
-/// An lzip stream decoded as it is read.
-///
-/// Members follow one another, each with its own dictionary size and a trailer
-/// holding the CRC and length this reader checks as it goes. Only one
-/// dictionary is held, so the stream decodes in bounded memory.
 pub struct Reader<R> {
     stage: Stage<R>,
 }
 
 impl<R: Read> Reader<R> {
-    /// Wrap `inner` at the start of an lzip stream.
     pub fn new(inner: R) -> Self {
         Reader { stage: Stage::Between(Pending::new(inner)) }
     }
@@ -160,9 +154,7 @@ impl<R: Read> Read for Reader<R> {
         loop {
             match std::mem::replace(&mut self.stage, Stage::Done) {
                 Stage::Done => return Ok(0),
-
                 Stage::Between(source) => self.start_member(source)?,
-
                 Stage::Member(mut decoder, crc, produced) => {
                     let n = decoder.read(buf)?;
                     if n > 0 {
@@ -178,10 +170,6 @@ impl<R: Read> Read for Reader<R> {
     }
 }
 
-/// An lzip stream written as its input arrives.
-///
-/// One member, whose trailer records the CRC and length once the input ends.
-/// Memory is one dictionary, not one archive.
 pub struct Writer<W: Write> {
     coder: RangeEncoder<CountingWriter<W>>,
     encoder: Encoder,
@@ -194,7 +182,6 @@ pub struct Writer<W: Write> {
 }
 
 impl<W: Write> Writer<W> {
-    /// Start a member with a dictionary sized for `level`.
     pub fn new(mut out: W, depth: usize, level: crate::codecs::Level) -> Result<Self> {
         let dict = crate::codecs::lzma::encode::dictionary_at(usize::MAX, level).clamp(1 << 12, 1 << 29);
         let code = dictionary_code(dict);
@@ -219,14 +206,12 @@ impl<W: Write> Writer<W> {
         })
     }
 
-    /// Hand over more input, encoding whatever has become complete.
     pub fn push(&mut self, bytes: &[u8]) -> Result<()> {
         self.crc.update(bytes);
         self.window.push(bytes);
         self.drain(false)
     }
 
-    /// Encode what is left, write the trailer and give back the writer.
     pub fn finish(mut self) -> Result<W> {
         self.drain(true)?;
 
@@ -268,14 +253,12 @@ impl<W: Write> Writer<W> {
     }
 }
 
-/// Encode `data` as a single lzip member.
 pub fn compress_at(data: &[u8], depth: usize, level: crate::codecs::Level) -> Result<Vec<u8>> {
     let mut writer = Writer::new(Vec::with_capacity(data.len() / 2 + 64), depth, level)?;
     writer.push(data)?;
     writer.finish()
 }
 
-/// Decode every member of an lzip stream, concatenating their contents.
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(size_hint.min(64 << 20));
     let mut at = 0usize;

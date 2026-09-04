@@ -356,12 +356,6 @@ enum Stage<R> {
     Done,
 }
 
-/// Streaming xz reader, one block at a time.
-///
-/// Only blocks whose sole filter is LZMA2 can be read this way; a block that
-/// stacks a delta or branch filter on top has to be held whole for the filter
-/// to run over it, and is reported as unsupported here so the caller can fall
-/// back to [`decompress`].
 pub struct Reader<R> {
     stage: Stage<R>,
     check: Check,

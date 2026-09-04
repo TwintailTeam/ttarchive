@@ -31,25 +31,15 @@ impl Window {
         self.floor = self.buf.len();
     }
 
-    /// How much output is reachable: bytes produced since the last dictionary
-    /// reset, which is what bounds a match distance.
     #[inline]
     pub fn history(&self) -> usize {
         self.buf.len() - self.floor
     }
 
-    /// Change how much history is kept when draining.
-    ///
-    /// A container whose members declare their own window sizes sets this as
-    /// each one starts.
     pub fn set_dictionary_size(&mut self, size: usize) {
         self.dict_size = size;
     }
 
-    /// The bytes produced from absolute position `from` onward.
-    ///
-    /// Only valid before they are drained, which is what lets a caller checksum
-    /// output it is about to hand on.
     pub fn since(&self, from: u64) -> &[u8] {
         let behind = (self.total - from) as usize;
         &self.buf[self.buf.len() - behind..]
