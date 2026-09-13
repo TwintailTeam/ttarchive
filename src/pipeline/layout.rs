@@ -6,15 +6,12 @@ use crate::pipeline::{ExtractOptions, Overwrite, UnsafeEntries};
 use crate::platform::{EntryKind, policy};
 use crate::utils::error::{Error, PathRejection, Result};
 
-/// Where an archive entry will land, once its name has been validated and any
-/// leading components stripped.
 #[derive(Debug, Clone)]
 pub struct Placement {
     pub path: PathBuf,
     pub index: usize,
 }
 
-/// Counters for entries that never reach the filesystem.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rejected {
     pub refused: u64,
@@ -28,10 +25,6 @@ impl Rejected {
     }
 }
 
-/// Whether an entry is one the caller asked for.
-///
-/// An empty selection means everything. A name selects that entry, and a name
-/// that is a directory selects everything beneath it.
 pub fn selected(name: &str, selection: &[String]) -> bool {
     if selection.is_empty() {
         return true;
@@ -43,7 +36,6 @@ pub fn selected(name: &str, selection: &[String]) -> bool {
     })
 }
 
-/// Decide how many leading components to drop for this archive.
 pub fn strip_depth<'a>(names: impl Iterator<Item = &'a str>, options: &ExtractOptions) -> usize {
     options.strip_components + usize::from(options.strip_root && has_common_root(names))
 }
@@ -76,9 +68,6 @@ pub fn strip_leading(path: &Path, count: usize) -> PathBuf {
     path.components().skip(count).collect()
 }
 
-/// Validate one entry name and place it, honouring the strip settings.
-///
-/// `Ok(None)` means the entry was rejected or emptied and the counters say why.
 pub fn place(name: &str, strip: usize, options: &ExtractOptions, rejected: &mut Rejected) -> Result<Option<PathBuf>> {
     let relative = match policy::to_relative_path(name, options.name_policy) {
         Ok(path) => path,
@@ -100,11 +89,6 @@ pub fn place(name: &str, strip: usize, options: &ExtractOptions, rejected: &mut 
     Ok(Some(relative))
 }
 
-/// Resolve two entries that strip down to the same destination path.
-///
-/// Extraction runs in parallel, so a collision left to the filesystem would race:
-/// both workers would see the path missing and both would write. Collisions are
-/// settled here, before any worker starts.
 pub struct Claims {
     seen: HashMap<PathBuf, usize>,
 }
@@ -147,7 +131,6 @@ impl Default for Claims {
     }
 }
 
-/// Refuse to extract into a symlinked destination.
 pub fn check_destination(dest: &Path) -> Result<()> {
     if let Ok(md) = fs::symlink_metadata(dest)
         && md.is_symlink()
@@ -157,7 +140,6 @@ pub fn check_destination(dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Create `relative` under `root`, refusing to walk through a symlink.
 pub fn create_directory(root: &Path, relative: &Path) -> Result<()> {
     let mut current = root.to_path_buf();
 

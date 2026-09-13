@@ -37,8 +37,6 @@ fi
 INPUT=$(du -sb "$CORPUS" | cut -f1)
 FILES=$(find "$CORPUS" -type f | wc -l)
 
-# Run a command, capturing wall time in seconds and peak RSS in MB. Results land
-# in RUN_SECS and RUN_PEAK.
 RUN_SECS=0
 RUN_PEAK=0
 run() {
@@ -60,8 +58,8 @@ human() { numfmt --to=iec --format='%.1f' "$1" 2>/dev/null || echo "$1"; }
 rate() { awk -v b="$1" -v s="$2" 'BEGIN{ if (s+0 == 0) printf "-"; else printf "%.0f", (b/1048576)/s }'; }
 pct() { awk -v a="$1" -v b="$2" 'BEGIN{ printf "%.1f", 100*a/b }'; }
 
-FORMATS=(tar tar.gz tar.bz2 tar.xz tar.zst tar.lzma tar.lz zip)
-declare -A TOOL=( [tar]="tar:" [tar.gz]="tar:-z" [tar.bz2]="tar:-j" [tar.xz]="tar:-J" [tar.zst]="tar:--zstd" [tar.lzma]="tar:--lzma" [tar.lz]="tar:--lzip" [zip]="zip:" )
+FORMATS=(tar tar.gz tar.bz2 tar.xz tar.zst tar.lzma tar.lz zip 7z)
+declare -A TOOL=( [tar]="tar:" [tar.gz]="tar:-z" [tar.bz2]="tar:-j" [tar.xz]="tar:-J" [tar.zst]="tar:--zstd" [tar.lzma]="tar:--lzma" [tar.lz]="tar:--lzip" [zip]="zip:" [7z]="7z:" )
 
 echo
 echo "corpus: $(human "$INPUT") in $FILES files, at $(nproc 2>/dev/null || echo '?') cores"
@@ -79,11 +77,11 @@ for fmt in "${FORMATS[@]}"; do
     entry="${TOOL[$fmt]}"; tool="${entry%%:*}"; flag="${entry#*:}"
     theirs="$WORK/theirs.$fmt"; rm -f "$theirs"
     if have "$tool"; then
-        if [ "$tool" = "tar" ]; then
-            if [ -n "$flag" ]; then run tar "$flag" -cf "$theirs" -C "$CORPUS" .; else run tar -cf "$theirs" -C "$CORPUS" .; fi
-        else
-            run zip -q -r "$theirs" "$CORPUS"
-        fi
+        case "$tool" in
+            tar) if [ -n "$flag" ]; then run tar "$flag" -cf "$theirs" -C "$CORPUS" .; else run tar -cf "$theirs" -C "$CORPUS" .; fi ;;
+            zip) run zip -q -r "$theirs" "$CORPUS" ;;
+            7z)  run 7z a -bso0 -bsp0 "$theirs" "$CORPUS" ;;
+        esac
         t_secs=$RUN_SECS; t_size=$(sz "$theirs")
     else
         t_secs="-"; t_size=0
@@ -110,7 +108,11 @@ for fmt in "${FORMATS[@]}"; do
     theirs="$WORK/theirs.$fmt"
     rm -rf "$WORK/t-out"; mkdir -p "$WORK/t-out"
     if have "$tool" && [ -s "$theirs" ]; then
-        if [ "$tool" = "tar" ]; then run tar -xf "$theirs" -C "$WORK/t-out"; else run unzip -qq -o "$theirs" -d "$WORK/t-out"; fi
+        case "$tool" in
+            tar) run tar -xf "$theirs" -C "$WORK/t-out" ;;
+            zip) run unzip -qq -o "$theirs" -d "$WORK/t-out" ;;
+            7z)  run 7z x -y -bso0 -bsp0 "$theirs" "-o$WORK/t-out" ;;
+        esac
         t_secs=$RUN_SECS
     else
         t_secs="-"
@@ -124,7 +126,7 @@ echo "COMPRESSION LEVELS (ours)"
 printf '%-10s | %23s | %23s | %23s\n' format "fast" "default" "best"
 printf '%s\n' "------------------------------------------------------------------------------------------"
 
-for fmt in tar.gz tar.bz2 tar.xz tar.zst tar.lzma tar.lz zip; do
+for fmt in tar.gz tar.bz2 tar.xz tar.zst tar.lzma tar.lz zip 7z; do
     printf '%-10s |' ".$fmt"
     for level in fast default best; do
         out="$WORK/lvl-$level.$fmt"; rm -f "$out"

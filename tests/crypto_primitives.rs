@@ -1,5 +1,6 @@
-use ttarchive::crypto::aes::{Aes, AesCtr};
+use ttarchive::crypto::aes::{Aes, AesCtr, AesDecrypt};
 use ttarchive::crypto::hmac::{constant_time_eq, hmac_sha1, pbkdf2_sha1};
+use ttarchive::crypto::sevenz_aes::{self, Properties};
 use ttarchive::crypto::sha1;
 use ttarchive::crypto::zipcrypto::ZipCrypto;
 
@@ -82,6 +83,37 @@ fn aes_known_vectors() {
 }
 
 #[test]
+fn aes_inverse_cipher_known_vectors() {
+    let plaintext = "00112233445566778899aabbccddeeff";
+
+    for (key_hex, ciphertext) in [
+        ("000102030405060708090a0b0c0d0e0f", "69c4e0d86a7b0430d8cdb78070b4c55a"),
+        ("000102030405060708090a0b0c0d0e0f1011121314151617", "dda97ca4864cdfe06eaf70a0ec0d7191"),
+        ("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "8ea2b7ca516745bfeafc49904b496089"),
+    ] {
+        let cipher = AesDecrypt::new(&unhex(key_hex)).expect("valid key length");
+        let mut block = [0u8; 16];
+        block.copy_from_slice(&unhex(ciphertext));
+        cipher.decrypt_block(&mut block);
+        assert_eq!(hex(&block), plaintext, "key {key_hex}");
+    }
+}
+
+#[test]
+fn aes_decrypt_undoes_encrypt_for_every_key_length() {
+    let plaintext: [u8; 16] = std::array::from_fn(|i| (i * 17 + 3) as u8);
+
+    for len in [16usize, 24, 32] {
+        let key: Vec<u8> = (0..len).map(|i| (i * 7 + 1) as u8).collect();
+        let mut block = plaintext;
+        Aes::new(&key).unwrap().encrypt_block(&mut block);
+        assert_ne!(block, plaintext);
+        AesDecrypt::new(&key).unwrap().decrypt_block(&mut block);
+        assert_eq!(block, plaintext, "{len} byte key");
+    }
+}
+
+#[test]
 fn aes_rejects_bad_key_lengths() {
     assert!(Aes::new(&[0u8; 15]).is_none());
     assert!(Aes::new(&[0u8; 17]).is_none());
@@ -160,6 +192,36 @@ fn zipcrypto_state_carries_across_calls() {
 }
 
 #[test]
+fn sevenz_aes_properties_round_trip_through_their_encoding() {
+    for salt in [0usize, 1, 8, 15, 16] {
+        let mut properties = Properties::generate(19);
+        properties.salt = vec![0xAB; salt];
+
+        let encoded = properties.to_bytes();
+        assert_eq!(Properties::parse(&encoded).unwrap(), properties, "salt {salt}");
+    }
+}
+
+#[test]
+fn sevenz_aes_cbc_encrypt_is_undone_by_the_reader() {
+    use std::io::Read;
+
+    let password = ttarchive::crypto::Password::from("correct horse battery");
+    let properties = Properties::generate(8);
+    let key = properties.key(&password);
+
+    for len in [0usize, 1, 15, 16, 17, 4096] {
+        let plain: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+        let cipher = sevenz_aes::cbc_encrypt(&plain, &key, properties.iv).unwrap();
+        assert_eq!(cipher.len() % 16, 0, "len {len}");
+
+        let mut back = Vec::new();
+        sevenz_aes::CbcDecryptReader::new(&cipher[..], &key, properties.iv).unwrap().read_to_end(&mut back).unwrap();
+        assert_eq!(&back[..len], &plain[..], "len {len}");
+    }
+}
+
+#[test]
 fn constant_time_eq_behaves_like_eq() {
     assert!(constant_time_eq(b"abc", b"abc"));
     assert!(!constant_time_eq(b"abc", b"abd"));
@@ -208,5 +270,62 @@ fn ctr_bulk_and_tail_paths_agree() {
             ctr.apply(piece);
         }
         assert_eq!(piecewise, whole, "chunk size {chunk}");
+    }
+}
+
+#[test]
+fn hardware_and_software_cbc_agree() {
+    use ttarchive::crypto::aes::CbcDecrypt;
+
+    let original: Vec<u8> = (0..8192).map(|i| (i * 31 % 251) as u8).collect();
+
+    for key_len in [16usize, 24, 32] {
+        let key: Vec<u8> = (0..key_len).map(|i| (i as u8).wrapping_mul(37)).collect();
+        let iv: [u8; 16] = std::array::from_fn(|i| (i as u8).wrapping_mul(11));
+
+        let cipher = sevenz_aes::cbc_encrypt(&original, &key, iv).unwrap();
+        assert_ne!(cipher[..original.len()], original[..], "key length {key_len}");
+
+        let mut whole = cipher.clone();
+        let mut backend = CbcDecrypt::new(&key, iv).unwrap();
+        println!("cbc accelerated: {}", backend.is_hardware_accelerated());
+        backend.apply(&mut whole);
+        assert_eq!(&whole[..original.len()], &original[..], "key length {key_len}");
+
+        for chunk in [16usize, 32, 160, 4096] {
+            let mut piecewise = cipher.clone();
+            let mut backend = CbcDecrypt::new(&key, iv).unwrap();
+            for piece in piecewise.chunks_mut(chunk) {
+                backend.apply(piece);
+            }
+            assert_eq!(piecewise, whole, "key length {key_len}, chunk {chunk}");
+        }
+    }
+}
+
+#[test]
+fn the_cbc_reader_agrees_with_itself_at_every_read_size() {
+    use std::io::Read;
+
+    let password = ttarchive::crypto::Password::from("chunky");
+    let properties = Properties::generate(4);
+    let key = properties.key(&password);
+
+    let original: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
+    let cipher = sevenz_aes::cbc_encrypt(&original, &key, properties.iv).unwrap();
+
+    for size in [1usize, 15, 16, 4095, 65_536, 200_000] {
+        let mut reader = sevenz_aes::CbcDecryptReader::new(&cipher[..], &key, properties.iv).unwrap();
+        let mut out = Vec::new();
+        let mut buffer = vec![0u8; size];
+
+        loop {
+            match reader.read(&mut buffer).unwrap() {
+                0 => break,
+                n => out.extend_from_slice(&buffer[..n]),
+            }
+        }
+
+        assert_eq!(&out[..original.len()], &original[..], "read size {size}");
     }
 }

@@ -287,6 +287,6 @@ fn ppmd_is_decode_only_and_rejects_freeze() {
     assert_eq!(Method::from_code(98).unwrap(), Method::Ppmd);
 
     let freeze = [0x0fu8, 0x20, 0, 0, 0, 0];
-    let err = ttarchive::codecs::ppmd::decompress(&freeze, 16).expect_err("FREEZE must be refused");
+    let err = ttarchive::codecs::ppmd::i::decompress(&freeze, 16).expect_err("FREEZE must be refused");
     assert!(err.is_unsupported(), "expected Unsupported, got {err}");
 }

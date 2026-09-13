@@ -28,12 +28,22 @@ pub struct Lzma2Decoder<R> {
     props: Option<Properties>,
     dict_size: u32,
     started: bool,
+    after_stored: bool,
     finished: bool,
 }
 
 impl<R: Read> Lzma2Decoder<R> {
     pub fn new(inner: R, dict_size: u32) -> Self {
-        Lzma2Decoder { inner, core: None, window: Window::new(dict_size as usize), props: None, dict_size, started: false, finished: false }
+        Lzma2Decoder {
+            inner,
+            core: None,
+            window: Window::new(dict_size as usize),
+            props: None,
+            dict_size,
+            started: false,
+            after_stored: false,
+            finished: false,
+        }
     }
 
     pub fn into_inner(self) -> R {
@@ -71,16 +81,15 @@ impl<R: Read> Lzma2Decoder<R> {
             if control == CONTROL_STORED_RESET {
                 self.window.reset_dictionary();
                 self.started = true;
+                self.core = None;
+                self.props = None;
             } else if !self.started {
                 return Err(Error::malformed("lzma2 stream begins with a chunk that does not reset the dictionary"));
             }
 
             let len = self.u16be()? as usize + 1;
-            let mut data = vec![0u8; len];
-            self.inner.read_exact(&mut data)?;
-            self.window.extend(&data);
-
-            self.core = None;
+            self.window.extend_from_reader(&mut self.inner, len)?;
+            self.after_stored = true;
             return Ok(());
         }
 
@@ -101,6 +110,11 @@ impl<R: Read> Lzma2Decoder<R> {
         if reset == 3 {
             self.window.reset_dictionary();
         }
+        if self.after_stored && reset == 0 && self.core.is_none() {
+            return Err(Error::malformed("lzma2 chunk continues a state that no earlier chunk established"));
+        }
+        self.after_stored = false;
+
         if reset >= 1 || self.core.is_none() {
             match &mut self.core {
                 Some(core) => core.reset(props),

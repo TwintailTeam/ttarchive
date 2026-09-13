@@ -2,9 +2,9 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use common::{TempDir, compressible, pseudo_random};
+use common::{TempDir, compressible, have, pseudo_random, skip};
 use ttarchive::{Archive, ArchiveType};
 
 const WRITABLE: [(ArchiveType, &str); 7] = [
@@ -21,16 +21,8 @@ fn without_lzip() -> impl Iterator<Item = (ArchiveType, &'static str)> {
     WRITABLE.into_iter().filter(|(kind, _)| *kind != ArchiveType::TarLz)
 }
 
-fn have(tool: &str) -> bool {
-    Command::new("sh").arg("-c").arg(format!("command -v {tool}")).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
-}
-
-fn skip(tool: &str) {
-    eprintln!("skipping: {tool} is not installed");
-}
-
 fn run(dir: &Path, program: &str, args: &[&str]) -> (bool, String) {
-    let output = Command::new(program).args(args).current_dir(dir).output().unwrap_or_else(|e| panic!("failed to run {program}: {e}"));
+    let output = Command::new(common::resolve(program)).args(args).current_dir(dir).output().unwrap_or_else(|e| panic!("failed to run {program}: {e}"));
 
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -175,9 +167,9 @@ fn we_extract_every_wrapper_bsdtar_writes() {
 
 #[test]
 fn we_extract_every_header_format_gnu_tar_writes() {
-    if !have("tar") {
-        return skip("tar");
-    }
+    let Some(gnu) = common::gnu_tar() else {
+        return skip("GNU tar");
+    };
 
     let dir = TempDir::new("ti-gnu-formats");
     let src = source(&dir);
@@ -185,7 +177,28 @@ fn we_extract_every_header_format_gnu_tar_writes() {
 
     for format in ["v7", "oldgnu", "gnu", "ustar", "pax", "posix"] {
         let name = format!("g-{format}.tar");
-        must_run(dir.path(), "tar", &["-cf", &name, &format!("--format={format}"), "-C", src.to_str().unwrap(), "."]);
+        must_run(dir.path(), &gnu, &["-cf", &name, &format!("--format={format}"), "-C", src.to_str().unwrap(), "."]);
+
+        let dest = dir.join(format!("{name}-out"));
+        Archive::new(dir.join(&name)).extract_to(&dest).unwrap_or_else(|e| panic!("{format}: {e}"));
+
+        assert_eq!(snapshot(&dest), expected, "{format}: we read this header format differently");
+    }
+}
+
+#[test]
+fn we_extract_every_header_format_bsdtar_writes() {
+    if !have("bsdtar") {
+        return skip("bsdtar");
+    }
+
+    let dir = TempDir::new("ti-bsd-formats");
+    let src = source(&dir);
+    let expected = snapshot(&src);
+
+    for format in ["v7", "ustar", "pax", "paxr", "gnutar"] {
+        let name = format!("b-{format}.tar");
+        must_run(dir.path(), "bsdtar", &["-cf", &name, "--format", format, "-C", src.to_str().unwrap(), "."]);
 
         let dest = dir.join(format!("{name}-out"));
         Archive::new(dir.join(&name)).extract_to(&dest).unwrap_or_else(|e| panic!("{format}: {e}"));
@@ -196,8 +209,11 @@ fn we_extract_every_header_format_gnu_tar_writes() {
 
 #[test]
 fn long_names_and_long_link_targets_survive_both_tools() {
-    if !have("tar") || !have("bsdtar") || !cfg!(unix) {
-        return skip("GNU tar and bsdtar on unix");
+    let Some(gnu) = common::gnu_tar() else {
+        return skip("GNU tar");
+    };
+    if !have("bsdtar") || !cfg!(unix) {
+        return skip("bsdtar on unix");
     }
 
     let dir = TempDir::new("ti-longnames");
@@ -208,7 +224,7 @@ fn long_names_and_long_link_targets_survive_both_tools() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&deep, dir.join("src/link.txt")).expect("symlink");
 
-    let cases: [(&str, &str, &[&str]); 3] = [("gnu.tar", "tar", &["--format=gnu"]), ("pax.tar", "tar", &["--format=pax"]), ("bsd.tar", "bsdtar", &[])];
+    let cases: [(&str, &str, &[&str]); 3] = [("gnu.tar", &gnu, &["--format=gnu"]), ("pax.tar", &gnu, &["--format=pax"]), ("bsd.tar", "bsdtar", &[])];
 
     for (name, tool, extra) in cases {
         let mut args = vec!["-cf", name];

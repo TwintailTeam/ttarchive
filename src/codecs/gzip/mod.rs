@@ -107,7 +107,7 @@ fn take_cstring(data: &[u8], at: usize, what: &str) -> Result<(Vec<u8>, usize)> 
 }
 
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(size_hint);
+    let mut out = Vec::with_capacity(crate::utils::limits::prealloc(size_hint as u64));
     let mut at = 0usize;
 
     while at < data.len() {
@@ -252,9 +252,11 @@ impl<R: Read> Feed<R> {
         let mut filled = 0usize;
 
         while filled < count {
-            match self.read(&mut out[filled..])? {
-                0 => break,
-                n => filled += n,
+            match self.read(&mut out[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
             }
         }
 
@@ -269,9 +271,13 @@ impl<R: Read> Feed<R> {
 
     fn byte(&mut self) -> std::io::Result<u8> {
         let mut one = [0u8; 1];
-        match self.read(&mut one)? {
-            0 => Err(Error::malformed("gzip header field is not terminated").into()),
-            _ => Ok(one[0]),
+        loop {
+            match self.read(&mut one) {
+                Ok(0) => return Err(Error::malformed("gzip header field is not terminated").into()),
+                Ok(_) => return Ok(one[0]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
         }
     }
 }
@@ -298,6 +304,7 @@ enum Stage<R> {
     Between(Option<(R, Vec<u8>)>),
     Member(Box<InflateReader<Feed<R>>>),
     Done,
+    Failed,
 }
 
 impl<R: Read> GzipReader<R> {
@@ -382,9 +389,20 @@ impl<R: Read> Read for GzipReader<R> {
             return Ok(0);
         }
 
+        let result = self.advance(buf);
+        if result.is_err() {
+            self.stage = Stage::Failed;
+        }
+        result
+    }
+}
+
+impl<R: Read> GzipReader<R> {
+    fn advance(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
             match &mut self.stage {
                 Stage::Done => return Ok(0),
+                Stage::Failed => return Err(Error::malformed("the gzip stream already failed and cannot be read further").into()),
 
                 Stage::Between(slot) => {
                     let (inner, pending) = slot.take().expect("a stream between members always has its reader");

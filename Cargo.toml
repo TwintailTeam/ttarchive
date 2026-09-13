@@ -2,6 +2,7 @@
 name = "ttarchive"
 description = "Archive library made for fast spec compliant unarchiving and archiving"
 version = "1.0.0"
+authors = ["TwintailTeam"]
 edition = "2024"
 
 [dependencies]

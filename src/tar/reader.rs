@@ -25,8 +25,6 @@ pub struct TarEntry {
 }
 
 impl TarEntry {
-    /// How many bytes of data follow the header, which for a sparse entry is
-    /// less than the size the file will have once its map is expanded.
     pub fn stored_size(&self) -> u64 {
         match &self.sparse {
             Some(map) if map.in_data => map.stored,
@@ -236,12 +234,18 @@ impl<R: Read> TarReader<R> {
             _ => size,
         };
 
-        let kind = head.kind;
+        let kind = match head.kind {
+            Kind::Regular if size == 0 && name.ends_with('/') => Kind::Directory,
+            other => other,
+        };
         let entry_kind = match kind {
             Kind::Directory | Kind::GnuDumpDir => EntryKind::Directory,
             Kind::Symlink => EntryKind::Symlink,
             _ => EntryKind::File,
         };
+
+        let uname = attributes.text("uname").unwrap_or_else(|| String::from_utf8_lossy(&head.uname).into_owned());
+        let gname = attributes.text("gname").unwrap_or_else(|| String::from_utf8_lossy(&head.gname).into_owned());
 
         let meta = EntryMeta {
             kind: entry_kind,
@@ -252,6 +256,8 @@ impl<R: Read> TarReader<R> {
             ctime: attributes.seconds("ctime"),
             uid: Some(uid),
             gid: Some(gid),
+            user: Some(uname.clone()).filter(|name| !name.is_empty()),
+            group: Some(gname.clone()).filter(|name| !name.is_empty()),
         };
 
         Ok(TarEntry {
@@ -260,8 +266,8 @@ impl<R: Read> TarReader<R> {
             meta,
             kind,
             linkname,
-            uname: attributes.text("uname").unwrap_or_else(|| String::from_utf8_lossy(&head.uname).into_owned()),
-            gname: attributes.text("gname").unwrap_or_else(|| String::from_utf8_lossy(&head.gname).into_owned()),
+            uname,
+            gname,
             devmajor: head.devmajor,
             devminor: head.devminor,
             format: head.format,

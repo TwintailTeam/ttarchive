@@ -44,6 +44,49 @@ const fn build_tables() -> [[u32; 256]; 4] {
     t
 }
 
+static INV_SBOX: [u8; 256] = build_inv_sbox();
+
+const fn build_inv_sbox() -> [u8; 256] {
+    let mut inv = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        inv[SBOX[i] as usize] = i as u8;
+        i += 1;
+    }
+    inv
+}
+
+#[inline]
+const fn mul(a: u8, b: u8) -> u8 {
+    let (mut a, mut b, mut product) = (a, b, 0u8);
+    while b != 0 {
+        if b & 1 != 0 {
+            product ^= a;
+        }
+        a = xtime(a);
+        b >>= 1;
+    }
+    product
+}
+
+static TD: [[u32; 256]; 4] = build_inv_tables();
+
+const fn build_inv_tables() -> [[u32; 256]; 4] {
+    let mut t = [[0u32; 256]; 4];
+    let mut i = 0;
+    while i < 256 {
+        let s = INV_SBOX[i];
+        let (e, b, d, n) = (mul(s, 14) as u32, mul(s, 11) as u32, mul(s, 13) as u32, mul(s, 9) as u32);
+
+        t[0][i] = e | (n << 8) | (d << 16) | (b << 24);
+        t[1][i] = b | (e << 8) | (n << 16) | (d << 24);
+        t[2][i] = d | (b << 8) | (e << 16) | (n << 24);
+        t[3][i] = n | (d << 8) | (b << 16) | (e << 24);
+        i += 1;
+    }
+    t
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySize {
     Aes128,
@@ -176,6 +219,77 @@ impl Aes {
     }
 }
 
+pub struct AesDecrypt {
+    round_keys: [u8; 240],
+    rounds: usize,
+}
+
+impl AesDecrypt {
+    pub fn new(key: &[u8]) -> Option<Self> {
+        let forward = Aes::new(key)?;
+        let rounds = forward.rounds();
+        let mut round_keys = *forward.round_key_bytes();
+
+        for round in 1..rounds {
+            for column in 0..4 {
+                let at = (round * 4 + column) * 4;
+                let word = inv_mix_column(u32::from_le_bytes([round_keys[at], round_keys[at + 1], round_keys[at + 2], round_keys[at + 3]]));
+                round_keys[at..at + 4].copy_from_slice(&word.to_le_bytes());
+            }
+        }
+
+        Some(AesDecrypt { round_keys, rounds })
+    }
+
+    #[inline]
+    fn round_key(&self, index: usize) -> u32 {
+        let b = index * 4;
+        u32::from_le_bytes([self.round_keys[b], self.round_keys[b + 1], self.round_keys[b + 2], self.round_keys[b + 3]])
+    }
+
+    pub fn decrypt_block(&self, block: &mut [u8; BLOCK_SIZE]) {
+        let last = self.rounds * 4;
+        let mut s = [0u32; 4];
+        for (c, slot) in s.iter_mut().enumerate() {
+            *slot = u32::from_le_bytes([block[c * 4], block[c * 4 + 1], block[c * 4 + 2], block[c * 4 + 3]]) ^ self.round_key(last + c);
+        }
+
+        for round in (1..self.rounds).rev() {
+            let k = round * 4;
+            let mut next = [0u32; 4];
+            for (c, slot) in next.iter_mut().enumerate() {
+                *slot = TD[0][(s[c] & 0xff) as usize]
+                    ^ TD[1][((s[(c + 3) % 4] >> 8) & 0xff) as usize]
+                    ^ TD[2][((s[(c + 2) % 4] >> 16) & 0xff) as usize]
+                    ^ TD[3][((s[(c + 1) % 4] >> 24) & 0xff) as usize]
+                    ^ self.round_key(k + c);
+            }
+            s = next;
+        }
+
+        for c in 0..4 {
+            let word = u32::from_le_bytes([
+                INV_SBOX[(s[c] & 0xff) as usize],
+                INV_SBOX[((s[(c + 3) % 4] >> 8) & 0xff) as usize],
+                INV_SBOX[((s[(c + 2) % 4] >> 16) & 0xff) as usize],
+                INV_SBOX[((s[(c + 1) % 4] >> 24) & 0xff) as usize],
+            ]) ^ self.round_key(c);
+            block[c * 4..c * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+    }
+}
+
+#[inline]
+fn inv_mix_column(word: u32) -> u32 {
+    let b = word.to_le_bytes();
+    u32::from_le_bytes([
+        mul(b[0], 14) ^ mul(b[1], 11) ^ mul(b[2], 13) ^ mul(b[3], 9),
+        mul(b[0], 9) ^ mul(b[1], 14) ^ mul(b[2], 11) ^ mul(b[3], 13),
+        mul(b[0], 13) ^ mul(b[1], 9) ^ mul(b[2], 14) ^ mul(b[3], 11),
+        mul(b[0], 11) ^ mul(b[1], 13) ^ mul(b[2], 9) ^ mul(b[3], 14),
+    ])
+}
+
 pub struct AesCtr {
     backend: Backend,
     counter: u128,
@@ -250,18 +364,22 @@ impl AesCtr {
             }
         }
 
-        if let Backend::Software(cipher) = &self.backend {
-            while data.len() - offset >= BLOCK_SIZE {
-                let mut block = self.counter.to_le_bytes();
-                self.counter = self.counter.wrapping_add(1);
-                cipher.encrypt_block(&mut block);
+        match &self.backend {
+            Backend::Software(cipher) => {
+                while data.len() - offset >= BLOCK_SIZE {
+                    let mut block = self.counter.to_le_bytes();
+                    self.counter = self.counter.wrapping_add(1);
+                    cipher.encrypt_block(&mut block);
 
-                let chunk = &mut data[offset..offset + BLOCK_SIZE];
-                for (byte, key) in chunk.iter_mut().zip(block.iter()) {
-                    *byte ^= key;
+                    let chunk = &mut data[offset..offset + BLOCK_SIZE];
+                    for (byte, key) in chunk.iter_mut().zip(block.iter()) {
+                        *byte ^= key;
+                    }
+                    offset += BLOCK_SIZE;
                 }
-                offset += BLOCK_SIZE;
             }
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            Backend::Hardware(_) => {}
         }
 
         while offset < data.len() {
@@ -271,6 +389,60 @@ impl AesCtr {
             data[offset] ^= self.keystream[self.used];
             self.used += 1;
             offset += 1;
+        }
+    }
+}
+
+pub struct CbcDecrypt {
+    backend: CbcBackend,
+    chain: [u8; BLOCK_SIZE],
+}
+
+enum CbcBackend {
+    Software(AesDecrypt),
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    Hardware(crate::crypto::aes_ni::AesNiDecrypt),
+}
+
+impl CbcDecrypt {
+    pub fn new(key: &[u8], iv: [u8; BLOCK_SIZE]) -> Option<Self> {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if let Some(hardware) = crate::crypto::aes_ni::AesNiDecrypt::new(key) {
+            return Some(CbcDecrypt { backend: CbcBackend::Hardware(hardware), chain: iv });
+        }
+
+        Some(CbcDecrypt { backend: CbcBackend::Software(AesDecrypt::new(key)?), chain: iv })
+    }
+
+    pub fn is_hardware_accelerated(&self) -> bool {
+        match self.backend {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            CbcBackend::Hardware(_) => true,
+            CbcBackend::Software(_) => false,
+        }
+    }
+
+    pub fn apply(&mut self, data: &mut [u8]) {
+        debug_assert_eq!(data.len() % BLOCK_SIZE, 0);
+
+        match &self.backend {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            CbcBackend::Hardware(cipher) => cipher.cbc(&mut self.chain, data),
+            CbcBackend::Software(cipher) => {
+                for block in data.chunks_exact_mut(BLOCK_SIZE) {
+                    let mut ciphertext = [0u8; BLOCK_SIZE];
+                    ciphertext.copy_from_slice(block);
+
+                    let mut plain = ciphertext;
+                    cipher.decrypt_block(&mut plain);
+                    for (byte, previous) in plain.iter_mut().zip(self.chain.iter()) {
+                        *byte ^= previous;
+                    }
+
+                    block.copy_from_slice(&plain);
+                    self.chain = ciphertext;
+                }
+            }
         }
     }
 }

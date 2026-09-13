@@ -2,16 +2,17 @@ mod common;
 
 use std::process::Command;
 
+use common::have;
 use ttarchive::tar::header::{self, Kind};
 use ttarchive::tar::{TarReader, pax};
 
-fn have(tool: &str) -> bool {
-    Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
+fn gnu_program() -> String {
+    common::gnu_tar().unwrap_or_else(|| "tar".to_string())
 }
 
 fn gnu_tar(dir: &common::TempDir, format: &str, extra: &[&str]) -> Vec<u8> {
     let archive = dir.join(format!("out-{format}.tar"));
-    let mut cmd = Command::new("tar");
+    let mut cmd = Command::new(gnu_program());
     cmd.arg("-cf").arg(&archive).arg(format!("--format={format}")).args(extra).arg("-C").arg(dir.join("src")).arg(".");
     let out = cmd.output().expect("run tar");
     assert!(out.status.success(), "tar failed: {}", String::from_utf8_lossy(&out.stderr));
@@ -139,7 +140,7 @@ fn pax_record_lengths_are_self_describing() {
 
 #[test]
 fn reads_gnu_tar_ustar_gnu_and_pax_output() {
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping: GNU tar not installed");
         return;
     }
@@ -162,7 +163,7 @@ fn reads_gnu_tar_ustar_gnu_and_pax_output() {
 
 #[test]
 fn reads_entry_contents_written_by_gnu_tar() {
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping: GNU tar not installed");
         return;
     }
@@ -191,7 +192,7 @@ fn reads_entry_contents_written_by_gnu_tar() {
 
 #[test]
 fn reads_names_longer_than_a_ustar_header_allows() {
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping: GNU tar not installed");
         return;
     }
@@ -209,7 +210,7 @@ fn reads_names_longer_than_a_ustar_header_allows() {
 
 #[test]
 fn reads_symlinks_and_hardlinks() {
-    if !have("tar") || !cfg!(unix) {
+    if !common::gnu_tar().is_some() || !cfg!(unix) {
         eprintln!("skipping: needs GNU tar on unix");
         return;
     }
@@ -250,7 +251,7 @@ fn reads_symlinks_and_hardlinks() {
 
 #[test]
 fn reads_a_sparse_file_written_by_gnu_tar() {
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping: GNU tar not installed");
         return;
     }
@@ -299,7 +300,7 @@ fn reads_bsdtar_output_too() {
 
 #[test]
 fn a_truncated_archive_is_reported() {
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping: GNU tar not installed");
         return;
     }
@@ -349,7 +350,7 @@ fn sparse_source(dir: &common::TempDir) -> Vec<u8> {
 
 #[test]
 fn reads_every_sparse_layout_gnu_tar_can_write() {
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping: GNU tar not installed");
         return;
     }
@@ -367,7 +368,7 @@ fn reads_every_sparse_layout_gnu_tar_can_write() {
 
     for (label, flags) in layouts {
         let archive = dir.join(format!("s-{label}.tar"));
-        let mut cmd = Command::new("tar");
+        let mut cmd = Command::new(gnu_program());
         cmd.arg("--sparse").arg("-cf").arg(&archive).args(flags).arg("-C").arg(dir.join("src")).arg(".");
         let out = cmd.output().expect("run tar");
         assert!(out.status.success(), "{label}: tar failed: {}", String::from_utf8_lossy(&out.stderr));
@@ -386,7 +387,7 @@ fn reads_every_sparse_layout_gnu_tar_can_write() {
 
 #[test]
 fn a_sparse_entry_reports_the_real_size_not_the_stored_one() {
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping: GNU tar not installed");
         return;
     }
@@ -395,7 +396,7 @@ fn a_sparse_entry_reports_the_real_size_not_the_stored_one() {
     let expected = sparse_source(&dir);
 
     let archive = dir.join("s.tar");
-    let out = Command::new("tar")
+    let out = Command::new(gnu_program())
         .arg("--sparse")
         .arg("-cf")
         .arg(&archive)
@@ -432,14 +433,14 @@ fn we_write_sparse_entries_that_we_and_gnu_tar_both_read_back() {
     assert_eq!(back.len(), expected.len(), "wrong length after our own round trip");
     assert!(back == expected, "our own round trip put the holes in the wrong places");
 
-    if !have("tar") {
+    if !common::gnu_tar().is_some() {
         eprintln!("skipping the external half: GNU tar not installed");
         return;
     }
 
     let theirs = dir.join("gnu-out");
     std::fs::create_dir_all(&theirs).unwrap();
-    let out = Command::new("tar").arg("-xf").arg(&archive).arg("-C").arg(&theirs).output().expect("run tar");
+    let out = Command::new(gnu_program()).arg("-xf").arg(&archive).arg("-C").arg(&theirs).output().expect("run tar");
     assert!(out.status.success(), "GNU tar rejected our sparse tar: {}", String::from_utf8_lossy(&out.stderr));
 
     let back = std::fs::read(theirs.join("src/sparse.bin")).expect("GNU tar wrote no entry");
@@ -499,4 +500,63 @@ fn zip_refuses_to_pretend_it_can_store_holes() {
 
     let err = ttarchive::Archive::new(dir.join("a.zip")).set_sparse(true).create_from([dir.join("src")]).expect_err("zip should refuse");
     assert!(err.is_unsupported(), "expected Unsupported, got {err}");
+}
+
+fn v7_header(name: &str, size: usize, mode: &str) -> [u8; 512] {
+    let mut block = [0u8; 512];
+    block[..name.len()].copy_from_slice(name.as_bytes());
+    block[100..108].copy_from_slice(format!("{mode:0>7}\0").as_bytes());
+    block[108..116].copy_from_slice(b"0001750\0");
+    block[116..124].copy_from_slice(b"0001750\0");
+    block[124..136].copy_from_slice(format!("{size:011o}\0").as_bytes());
+    block[136..148].copy_from_slice(b"14000000000\0");
+    block[148..156].copy_from_slice(b"        ");
+
+    let sum: u32 = block.iter().map(|&b| b as u32).sum();
+    block[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+    block
+}
+
+fn v7_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, body) in entries {
+        let mode = if name.ends_with('/') { "755" } else { "644" };
+        out.extend_from_slice(&v7_header(name, body.len(), mode));
+        out.extend_from_slice(body);
+        out.resize(out.len().div_ceil(512) * 512, 0);
+    }
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+#[test]
+fn a_v7_directory_is_recognised_by_its_trailing_slash() {
+    let dir = common::TempDir::new("tar-v7-dirs");
+    let archive = dir.join("v7.tar");
+    std::fs::write(&archive, v7_archive(&[("./", b""), ("./sub/", b""), ("./sub/f.txt", b"hi\n"), ("./empty/", b"")])).unwrap();
+
+    let listed: Vec<(String, bool)> = ttarchive::Archive::new(&archive).entries().unwrap().into_iter().map(|e| (e.name.clone(), e.is_dir())).collect();
+    assert!(listed.contains(&("./sub/".to_string(), true)), "{listed:?}");
+    assert!(listed.contains(&("./sub/f.txt".to_string(), false)), "{listed:?}");
+
+    let out = dir.join("out");
+    ttarchive::Archive::new(&archive).extract_to(&out).expect("a v7 archive with directories extracts");
+
+    assert!(out.join("sub").is_dir());
+    assert!(out.join("empty").is_dir(), "an empty v7 directory is still a directory");
+    assert_eq!(std::fs::read(out.join("sub/f.txt")).unwrap(), b"hi\n");
+}
+
+#[test]
+fn a_v7_file_whose_name_ends_in_a_slash_but_holds_data_is_not_mistaken_for_a_directory() {
+    let data = v7_archive(&[("odd/", b"payload"), ("after.txt", b"still aligned")]);
+
+    let mut reader = TarReader::new(&data[..]);
+    let first = reader.next_entry().unwrap().expect("first entry");
+    assert_eq!(first.kind, Kind::Regular);
+    assert_eq!(first.size, 7);
+    reader.skip_data(&first).unwrap();
+
+    let second = reader.next_entry().unwrap().expect("the reader stays aligned past it");
+    assert_eq!(second.name, "after.txt");
 }

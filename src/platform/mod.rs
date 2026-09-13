@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod policy;
 
 #[cfg(unix)]
@@ -55,11 +56,24 @@ pub struct EntryMeta {
     pub ctime: Option<i64>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
+    pub user: Option<String>,
+    pub group: Option<String>,
 }
 
 impl EntryMeta {
     pub fn file() -> Self {
-        EntryMeta { kind: EntryKind::File, unix_mode: None, dos_attrs: None, mtime: None, atime: None, ctime: None, uid: None, gid: None }
+        EntryMeta {
+            kind: EntryKind::File,
+            unix_mode: None,
+            dos_attrs: None,
+            mtime: None,
+            atime: None,
+            ctime: None,
+            uid: None,
+            gid: None,
+            user: None,
+            group: None,
+        }
     }
 
     pub fn directory() -> Self {
@@ -93,4 +107,22 @@ impl EntryMeta {
         }
         self.unix_mode.is_some_and(|m| m & 0o200 == 0)
     }
+}
+
+pub(crate) fn file_times(meta: &EntryMeta) -> Option<std::fs::FileTimes> {
+    let modified = meta.mtime.and_then(system_time)?;
+    let times = std::fs::FileTimes::new().set_modified(modified);
+    Some(match meta.atime.and_then(system_time) {
+        Some(accessed) => times.set_accessed(accessed),
+        None => times,
+    })
+}
+
+fn system_time(seconds: i64) -> Option<std::time::SystemTime> {
+    let offset = std::time::Duration::from_secs(seconds.unsigned_abs());
+    if seconds >= 0 { std::time::UNIX_EPOCH.checked_add(offset) } else { std::time::UNIX_EPOCH.checked_sub(offset) }
+}
+
+pub(crate) fn times_not_representable(error: &std::io::Error) -> bool {
+    matches!(error.kind(), std::io::ErrorKind::InvalidInput | std::io::ErrorKind::Unsupported)
 }

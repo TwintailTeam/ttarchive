@@ -120,7 +120,7 @@ struct Frame {
 }
 
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(size_hint.min(64 << 20));
+    let mut out = Vec::with_capacity(crate::utils::limits::prealloc(size_hint as u64));
     Reader::new(data, size_hint as u64).read_to_end(&mut out)?;
     Ok(out)
 }

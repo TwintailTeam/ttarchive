@@ -56,7 +56,12 @@ impl Window {
         let keep = self.dict_size.min(self.history());
         let droppable = self.buf.len() - keep;
         let removable = self.read.min(droppable);
-        if removable >= DRAIN_THRESHOLD {
+
+        // Dropping the front moves everything still held, so the threshold
+        // scales with the dictionary: a small one drains often and cheaply, a
+        // large one waits until the move is worth its own cost.
+        let threshold = (self.dict_size / 4).clamp(DRAIN_THRESHOLD, 16 * 1024 * 1024);
+        if removable >= threshold {
             self.buf.drain(..removable);
             self.read -= removable;
             self.floor = self.floor.saturating_sub(removable);
@@ -72,6 +77,14 @@ impl Window {
     pub fn extend(&mut self, data: &[u8]) {
         self.buf.extend_from_slice(data);
         self.total += data.len() as u64;
+    }
+
+    pub fn extend_from_reader(&mut self, reader: &mut impl std::io::Read, len: usize) -> std::io::Result<()> {
+        let at = self.buf.len();
+        self.buf.resize(at + len, 0);
+        reader.read_exact(&mut self.buf[at..])?;
+        self.total += len as u64;
+        Ok(())
     }
 
     #[inline]

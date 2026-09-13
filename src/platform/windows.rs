@@ -67,11 +67,11 @@ pub fn read_meta(path: &Path) -> Result<EntryMeta> {
         ctime: unix_time(md.creation_time()),
         uid: None,
         gid: None,
+        user: None,
+        group: None,
     })
 }
 
-/// Windows exposes no inode through `std`, so hard links cannot be detected
-/// when creating an archive; each name is stored as its own copy.
 pub fn link_identity(_path: &Path) -> Option<(u64, u64)> {
     None
 }
@@ -88,7 +88,7 @@ pub fn create_hard_link(target: &Path, path: &Path) -> Result<()> {
 
 pub fn read_symlink_target(path: &Path) -> Result<Vec<u8>> {
     let target = fs::read_link(path)?;
-    let s = target.to_str().ok_or_else(|| crate::error::Error::malformed(format!("symlink target of {} is not valid UTF-8", path.display())))?;
+    let s = target.to_str().ok_or_else(|| crate::utils::error::Error::malformed(format!("symlink target of {} is not valid UTF-8", path.display())))?;
     Ok(s.replace('\\', "/").into_bytes())
 }
 
@@ -118,7 +118,7 @@ pub fn create_symlink(target: &str, path: &Path) -> Result<()> {
             )
             .into()
         } else {
-            crate::error::Error::Io(e)
+            crate::utils::error::Error::Io(e)
         }
     })
 }
@@ -133,8 +133,27 @@ pub fn apply_permissions(path: &Path, meta: &EntryMeta) -> Result<()> {
     Ok(())
 }
 
-pub fn apply_times(_path: &Path, _meta: &EntryMeta) -> Result<()> {
-    Ok(())
+pub fn apply_owner(_path: &Path, _meta: &EntryMeta, uid: Option<u32>, gid: Option<u32>) -> Result<bool> {
+    Ok(uid.is_none() && gid.is_none())
+}
+
+const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+pub fn apply_times(path: &Path, meta: &EntryMeta) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    if meta.kind == EntryKind::Symlink {
+        return Ok(());
+    }
+    let Some(times) = crate::platform::file_times(meta) else { return Ok(()) };
+
+    let handle = fs::OpenOptions::new().access_mode(FILE_WRITE_ATTRIBUTES).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(path)?;
+    match handle.set_times(times) {
+        Err(e) if crate::platform::times_not_representable(&e) => Ok(()),
+        other => Ok(other?),
+    }
 }
 
 pub fn scratch_dir_mode() -> u32 {

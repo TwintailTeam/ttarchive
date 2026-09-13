@@ -5,5 +5,6 @@ pub mod crc64;
 pub mod datetime;
 pub mod error;
 pub mod io;
+pub mod limits;
 pub mod progress;
 pub mod xxhash;

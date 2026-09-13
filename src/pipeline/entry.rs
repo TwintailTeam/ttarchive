@@ -2,30 +2,32 @@ use crate::crypto::winzip_aes::AesExtra;
 use crate::platform::{EntryKind, EntryMeta};
 use crate::zip::spec::flags;
 
-/// One entry in an archive, whatever the format.
+/// One thing inside an archive, whatever the format.
 #[derive(Debug, Clone)]
 pub struct Entry {
-    /// Entry name, always using `/` separators.
+    /// The name, always with `/` separators.
     pub name: String,
 
-    /// Size of the entry's contents once decompressed.
+    /// How big the contents are once decompressed.
     pub size: u64,
 
-    /// Kind, permissions, ownership and timestamps.
+    /// What it is, plus its permissions, owner and timestamps.
     pub meta: EntryMeta,
 
-    /// Fields that only one archive format has.
+    /// Whatever else its own format recorded.
     pub detail: EntryDetail,
 }
 
-/// Per-format fields hanging off an [`Entry`].
+/// The fields only one format has, hanging off an [`Entry`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum EntryDetail {
-    /// The entry came from a ZIP archive.
+    /// The entry came from a ZIP.
     Zip(ZipDetail),
-    /// The entry came from a tar archive.
+    /// The entry came from a tar.
     Tar(TarDetail),
+    /// The entry came from a 7z.
+    SevenZ(SevenZDetail),
 }
 
 impl Entry {
@@ -54,6 +56,16 @@ impl Entry {
         self.meta.gid
     }
 
+    /// Owning user name, when the archive recorded one. Tar only.
+    pub fn user(&self) -> Option<&str> {
+        self.meta.user.as_deref()
+    }
+
+    /// Owning group name, when the archive recorded one. Tar only.
+    pub fn group(&self) -> Option<&str> {
+        self.meta.group.as_deref()
+    }
+
     /// True when this entry is a directory.
     pub fn is_dir(&self) -> bool {
         self.meta.kind == EntryKind::Directory
@@ -77,6 +89,14 @@ impl Entry {
         }
     }
 
+    /// The 7z-specific fields, when this entry came from a 7z archive.
+    pub fn sevenz(&self) -> Option<&SevenZDetail> {
+        match &self.detail {
+            EntryDetail::SevenZ(detail) => Some(detail),
+            _ => None,
+        }
+    }
+
     /// The tar-specific fields, when this entry came from a tar archive.
     pub fn tar(&self) -> Option<&TarDetail> {
         match &self.detail {
@@ -86,7 +106,24 @@ impl Entry {
     }
 }
 
-/// Fields carried only by ZIP entries.
+/// What a 7z entry carries that others do not.
+#[derive(Debug, Clone)]
+pub struct SevenZDetail {
+    /// The checksum the header recorded for these bytes, if it recorded one.
+    pub crc: Option<u32>,
+
+    /// The Windows attribute word, whose high sixteen bits hold a Unix mode when
+    /// [`crate::sevenz::spec::attribute::UNIX_EXTENSION`] is set in the low ones.
+    pub attributes: Option<u32>,
+
+    /// This is a deletion marker rather than a real entry.
+    ///
+    /// An incremental 7z uses one to say a path was removed. Extracting it
+    /// deletes that path if it is there.
+    pub is_anti: bool,
+}
+
+/// What a ZIP entry carries that others do not.
 #[derive(Debug, Clone)]
 pub struct ZipDetail {
     /// The name exactly as stored, before decoding.
@@ -95,10 +132,11 @@ pub struct ZipDetail {
     /// Decoded per-entry comment.
     pub comment: String,
 
-    /// Raw compression method number.
+    /// The raw method number, as stored.
     ///
-    /// Left unresolved so listing never fails on an undecodable entry. Use
-    /// [`ZipDetail::method`] to resolve it.
+    /// Kept unresolved so that listing an archive never fails just because one
+    /// entry uses a method this build cannot decode. [`ZipDetail::method`]
+    /// resolves it.
     pub method_code: u16,
 
     /// CRC-32 of the uncompressed data.
@@ -129,7 +167,7 @@ pub struct ZipDetail {
     /// Raw external file attributes.
     pub external_attributes: u32,
 
-    /// Internal file attributes; bit 0 marks the entry as text.
+    /// Internal file attributes. Bit 0 marks the entry as text.
     pub internal_attributes: u16,
 
     /// Modification time from the MS-DOS fields, as Unix epoch seconds.
@@ -140,10 +178,10 @@ pub struct ZipDetail {
 }
 
 impl ZipDetail {
-    /// Resolve the compression method, or report it as unsupported.
+    /// The compression method, or an error if this build does not know it.
     ///
-    /// An AE-x entry stores the marker 99 and keeps the real method in the
-    /// `0x9901` extra field; this returns the real one.
+    /// An AE-x encrypted entry stores 99 as its method and keeps the real one
+    /// in an extra field. This returns the real one.
     pub fn method(&self) -> crate::Result<crate::codecs::Method> {
         crate::codecs::Method::from_code(self.effective_method_code())
     }
@@ -177,7 +215,7 @@ impl ZipDetail {
     }
 }
 
-/// Fields carried only by tar entries.
+/// What a tar entry carries that others do not.
 #[derive(Debug, Clone)]
 pub struct TarDetail {
     /// Raw type flag byte from the header.

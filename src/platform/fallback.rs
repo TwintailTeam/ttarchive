@@ -12,8 +12,6 @@ pub fn read_meta(path: &Path) -> Result<EntryMeta> {
     Ok(EntryMeta { kind, ..EntryMeta::file() })
 }
 
-/// Windows exposes no inode through `std`, so hard links cannot be detected
-/// when creating an archive; each name is stored as its own copy.
 pub fn link_identity(_path: &Path) -> Option<(u64, u64)> {
     None
 }
@@ -40,8 +38,20 @@ pub fn apply_permissions(_path: &Path, _meta: &EntryMeta) -> Result<()> {
     Ok(())
 }
 
-pub fn apply_times(_path: &Path, _meta: &EntryMeta) -> Result<()> {
-    Ok(())
+pub fn apply_owner(_path: &Path, _meta: &EntryMeta, uid: Option<u32>, gid: Option<u32>) -> Result<bool> {
+    Ok(uid.is_none() && gid.is_none())
+}
+
+pub fn apply_times(path: &Path, meta: &EntryMeta) -> Result<()> {
+    if meta.kind == EntryKind::Symlink {
+        return Ok(());
+    }
+    let Some(times) = crate::platform::file_times(meta) else { return Ok(()) };
+
+    match fs::File::open(path)?.set_times(times) {
+        Err(e) if crate::platform::times_not_representable(&e) => Ok(()),
+        other => Ok(other?),
+    }
 }
 
 pub fn scratch_dir_mode() -> u32 {

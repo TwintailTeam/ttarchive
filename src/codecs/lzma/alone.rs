@@ -23,7 +23,7 @@ pub fn reader<R: Read>(mut input: R) -> Result<LzmaDecoder<R>> {
 }
 
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(size_hint.min(64 << 20));
+    let mut out = Vec::with_capacity(crate::utils::limits::prealloc(size_hint as u64));
     reader(data)?.read_to_end(&mut out)?;
     Ok(out)
 }

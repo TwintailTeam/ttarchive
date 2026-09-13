@@ -497,7 +497,7 @@ pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
 }
 
 pub fn decompress_variant(data: &[u8], size_hint: usize, variant: Variant) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(size_hint);
+    let mut out = Vec::with_capacity(crate::utils::limits::prealloc(size_hint as u64));
     let mut reader = InflateReader::with_variant(data, variant);
     reader.read_to_end(&mut out)?;
     Ok(out)

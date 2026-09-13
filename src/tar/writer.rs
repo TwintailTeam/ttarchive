@@ -90,6 +90,8 @@ impl<W: Write> TarWriter<W> {
 
         let uid = meta.uid.unwrap_or(0) as u64;
         let gid = meta.gid.unwrap_or(0) as u64;
+        let uname = self.owner_name("uname", meta.user.as_deref(), header::UNAME.1, &mut extended);
+        let gname = self.owner_name("gname", meta.group.as_deref(), header::GNAME.1, &mut extended);
 
         if !extended.is_empty() {
             let payload = pax::encode(&extended);
@@ -105,14 +107,25 @@ impl<W: Write> TarWriter<W> {
             mtime: meta.mtime.unwrap_or(0),
             kind,
             linkname: linkname.as_bytes().to_vec(),
-            uname: Vec::new(),
-            gname: Vec::new(),
+            uname,
+            gname,
             devmajor: 0,
             devminor: 0,
             format: self.format,
         };
 
         self.emit(&header::write(&head))
+    }
+
+    fn owner_name(&self, key: &str, name: Option<&str>, width: usize, extended: &mut Attributes) -> Vec<u8> {
+        let Some(name) = name.filter(|name| !name.is_empty()) else { return Vec::new() };
+        if name.len() <= width {
+            return name.as_bytes().to_vec();
+        }
+        if self.format != Format::Gnu {
+            extended.set(key, name.as_bytes().to_vec());
+        }
+        Vec::new()
     }
 
     pub fn add_sparse(&mut self, name: &str, meta: &EntryMeta, data: &[u8]) -> Result<bool> {
@@ -132,6 +145,8 @@ impl<W: Write> TarWriter<W> {
         extended.set("GNU.sparse.name", name.as_bytes().to_vec());
         extended.set("GNU.sparse.realsize", data.len().to_string().into_bytes());
         extended.set("size", stored.to_string().into_bytes());
+        let uname = self.owner_name("uname", meta.user.as_deref(), header::UNAME.1, &mut extended);
+        let gname = self.owner_name("gname", meta.group.as_deref(), header::GNAME.1, &mut extended);
 
         self.emit_metadata(Kind::PaxNext, PAX_NAME, &pax::encode(&extended))?;
 
@@ -143,6 +158,8 @@ impl<W: Write> TarWriter<W> {
             size: stored,
             mtime: meta.mtime.unwrap_or(0),
             kind: Kind::Regular,
+            uname,
+            gname,
             format: self.format,
             ..Header::default()
         };

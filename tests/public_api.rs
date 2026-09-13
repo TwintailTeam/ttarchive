@@ -21,8 +21,9 @@ fn archive_type_is_detected_from_extension() {
     }
     assert_eq!(ArchiveType::from_extension(Path::new("a.tar")), Some(ArchiveType::Tar));
     assert_eq!(ArchiveType::from_extension(Path::new("a.tar.gz")), Some(ArchiveType::TarGz));
+    assert_eq!(ArchiveType::from_extension(Path::new("a.7z")), Some(ArchiveType::SevenZ));
 
-    for name in ["a.gz", "a", "a.7z", "a.rar"] {
+    for name in ["a.gz", "a", "a.rar"] {
         assert_eq!(ArchiveType::from_extension(Path::new(name)), None, "{name}");
     }
 }
@@ -32,6 +33,7 @@ fn archive_type_is_detected_from_magic() {
     assert_eq!(ArchiveType::from_magic(&[0x50, 0x4b, 0x03, 0x04]), Some(ArchiveType::Zip));
     assert_eq!(ArchiveType::from_magic(&[0x50, 0x4b, 0x05, 0x06]), Some(ArchiveType::Zip));
     assert_eq!(ArchiveType::from_magic(&[0x50, 0x4b, 0x07, 0x08]), Some(ArchiveType::Zip));
+    assert_eq!(ArchiveType::from_magic(b"7z\xbc\xaf\x27\x1c"), Some(ArchiveType::SevenZ));
     assert_eq!(ArchiveType::from_magic(b"7z\xbc\xaf"), None);
     assert_eq!(ArchiveType::from_magic(b"PK"), None);
 }
@@ -228,7 +230,7 @@ fn an_unknown_extension_without_magic_is_rejected() {
     let dir = common::TempDir::new("api-unknown");
     let source = sample(&dir);
 
-    let result = Archive::new(dir.join("out.7z")).create_from([&source]);
+    let result = Archive::new(dir.join("out.rar")).create_from([&source]);
     assert!(result.is_err(), "an unknown target extension should not silently produce an archive");
 
     let result = Archive::new(dir.join("out")).create_from([&source]);

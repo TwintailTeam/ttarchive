@@ -30,13 +30,11 @@ pub fn read_meta(path: &Path) -> Result<EntryMeta> {
         ctime: Some(md.ctime()),
         uid: Some(md.uid()),
         gid: Some(md.gid()),
+        user: None,
+        group: None,
     })
 }
 
-/// What identifies a file that more than one name points at.
-///
-/// `None` when the file has a single link, so the caller has nothing to
-/// deduplicate against.
 pub fn link_identity(path: &Path) -> Option<(u64, u64)> {
     let md = fs::symlink_metadata(path).ok()?;
     if md.nlink() < 2 { None } else { Some((md.dev(), md.ino())) }
@@ -77,8 +75,28 @@ pub fn apply_permissions(path: &Path, meta: &EntryMeta) -> Result<()> {
     Ok(())
 }
 
-pub fn apply_times(_path: &Path, _meta: &EntryMeta) -> Result<()> {
-    Ok(())
+pub fn apply_owner(path: &Path, meta: &EntryMeta, uid: Option<u32>, gid: Option<u32>) -> Result<bool> {
+    if uid.is_none() && gid.is_none() {
+        return Ok(true);
+    }
+    let changed = if meta.kind == EntryKind::Symlink { std::os::unix::fs::lchown(path, uid, gid) } else { std::os::unix::fs::chown(path, uid, gid) };
+    match changed {
+        Ok(()) => Ok(true),
+        Err(e) if matches!(e.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidInput) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn apply_times(path: &Path, meta: &EntryMeta) -> Result<()> {
+    if meta.kind == EntryKind::Symlink {
+        return Ok(());
+    }
+    let Some(times) = crate::platform::file_times(meta) else { return Ok(()) };
+
+    match fs::File::open(path)?.set_times(times) {
+        Err(e) if crate::platform::times_not_representable(&e) => Ok(()),
+        other => Ok(other?),
+    }
 }
 
 pub fn scratch_dir_mode() -> u32 {

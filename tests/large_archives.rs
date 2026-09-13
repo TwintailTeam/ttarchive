@@ -283,7 +283,7 @@ fn external_tools_verify_large_archives() {
             continue;
         }
 
-        let out = std::process::Command::new(tool).args(&args).current_dir(work.path()).output().expect("run tool");
+        let out = std::process::Command::new(common::resolve(tool)).args(&args).current_dir(work.path()).output().expect("run tool");
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(out.status.success(), "{tool} failed:\n{text}");
         println!("  {tool}: ok");
@@ -344,7 +344,7 @@ fn external_tools_verify_zip64_archives() {
     let archive = work.join("a.zip");
     Archive::new(&archive).set_type(ArchiveType::Zip).set_level(Level::Fast).create_from([&src.join("huge.txt")]).unwrap();
 
-    let out = std::process::Command::new("7z").args(["t", "a.zip"]).current_dir(work.path()).output().expect("run 7z");
+    let out = std::process::Command::new(common::resolve("7z")).args(["t", "a.zip"]).current_dir(work.path()).output().expect("run 7z");
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "7z rejected our Zip64 archive:\n{text}");
 }

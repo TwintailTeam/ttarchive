@@ -1,3 +1,4 @@
+pub mod bcj;
 pub mod bzip2;
 pub mod compress;
 pub mod deflate;
@@ -15,26 +16,43 @@ pub mod zstd;
 use std::io::{Read, Write};
 
 use crate::utils::error::{Error, Result, Unsupported};
+use crate::utils::limits;
 use crate::zip::spec::version;
 
+/// A compression method, named by its ZIP method number.
+///
+/// This build reads all of them. [`Method::can_encode`] says which it can also
+/// write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum Method {
+    /// Stored with no compression at all.
     Store,
+    /// PKWARE Shrink. Read only, and long obsolete.
     Shrink,
+    /// PKWARE Reduce, at one of four factors. Read only, and long obsolete.
     Reduce(u8),
+    /// PKWARE Implode. Read only, and long obsolete.
     Implode,
+    /// Deflate, which almost every ZIP uses.
     #[default]
     Deflate,
+    /// Deflate64. Read only.
     Deflate64,
+    /// bzip2.
     Bzip2,
+    /// Raw LZMA. Read only.
     Lzma,
+    /// Zstandard. Read only.
     Zstd,
+    /// PPMd variant I. Read only.
     Ppmd,
+    /// xz. Read only.
     Xz,
 }
 
 impl Method {
+    /// The method a ZIP method number names.
     pub fn from_code(code: u16) -> Result<Self> {
         match code {
             0 => Ok(Method::Store),
@@ -52,6 +70,7 @@ impl Method {
         }
     }
 
+    /// The ZIP method number for this method.
     pub fn code(self) -> u16 {
         match self {
             Method::Store => 0,
@@ -68,6 +87,7 @@ impl Method {
         }
     }
 
+    /// The ZIP version a reader needs to handle this method.
     pub fn version_needed(self) -> u16 {
         match self {
             Method::Store => 10,
@@ -79,21 +99,37 @@ impl Method {
         }
     }
 
+    /// Whether this build can write this method, not just read it.
     pub fn can_encode(self) -> bool {
         matches!(self, Method::Store | Method::Deflate | Method::Bzip2)
     }
 }
 
+/// How hard to work at compressing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
+    /// Do not compress at all. Store the bytes as they are.
     None,
+    /// Compress quickly, accepting a larger archive.
     Fast,
+    /// A sensible balance of the two.
     #[default]
     Default,
+    /// Compress as well as this build knows how, however long it takes.
     Best,
 }
 
 impl Level {
+    /// How far the LZMA match finders look for a longer match.
+    pub fn search_depth(self) -> usize {
+        match self {
+            Level::None | Level::Fast => 8,
+            Level::Default => 32,
+            Level::Best => 128,
+        }
+    }
+
+    /// The bzip2 block size for this level, in hundreds of kilobytes.
     pub fn bzip2_block_size(self) -> u8 {
         match self {
             Level::None | Level::Fast => 1,
@@ -101,6 +137,7 @@ impl Level {
         }
     }
 
+    /// The bits a ZIP entry's flags use to record this level.
     pub fn gp_flag_bits(self) -> u16 {
         match self {
             Level::Best => 0b010,
@@ -116,7 +153,7 @@ pub fn decoder<'a, R: Read + 'a>(method: Method, input: R, uncompressed_size: u6
         let mut raw = Vec::new();
         let mut input = input;
         input.read_to_end(&mut raw)?;
-        let hint = uncompressed_size.min(1 << 30) as usize;
+        let hint = limits::prealloc(uncompressed_size);
         return Ok(Box::new(std::io::Cursor::new(legacy::decompress(method, &raw, flags, hint)?)));
     }
 
@@ -128,7 +165,7 @@ pub fn decoder<'a, R: Read + 'a>(method: Method, input: R, uncompressed_size: u6
         Method::Lzma => Box::new(lzma::reader(input, Some(uncompressed_size))?),
         Method::Zstd => Box::new(zstd::Reader::new(input, uncompressed_size)),
         Method::Xz => Box::new(xz::Reader::new(input, uncompressed_size)),
-        Method::Ppmd => Box::new(ppmd::Reader::new(input, uncompressed_size)),
+        Method::Ppmd => Box::new(ppmd::i::Reader::new(input, uncompressed_size)),
         Method::Shrink | Method::Reduce(_) | Method::Implode => unreachable!("legacy methods return early"),
     })
 }

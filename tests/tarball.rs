@@ -3,11 +3,8 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
+use common::have;
 use ttarchive::{Archive, ArchiveType};
-
-fn have(tool: &str) -> bool {
-    Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
-}
 
 fn sample(dir: &common::TempDir) -> std::path::PathBuf {
     dir.write("src/a.txt", b"hello tarball");
@@ -53,13 +50,14 @@ fn extensions_resolve_to_the_right_format() {
         ("a.tar.Z", ArchiveType::TarZ),
         ("a.zip", ArchiveType::Zip),
         ("a.jar", ArchiveType::Zip),
+        ("a.7z", ArchiveType::SevenZ),
     ];
 
     for (name, want) in cases {
         assert_eq!(ArchiveType::from_extension(Path::new(name)), Some(want), "{name}");
     }
 
-    for name in ["a.gz", "a.bz2", "a.xz", "a.zst", "a", "a.7z", ".tar", ".tgz"] {
+    for name in ["a.gz", "a.bz2", "a.xz", "a.zst", "a", ".tar", ".tgz"] {
         assert_eq!(ArchiveType::from_extension(Path::new(name)), None, "{name} should not resolve");
     }
 }
@@ -372,7 +370,7 @@ fn we_read_every_tarball_wrapper_a_tool_can_produce() {
             continue;
         }
 
-        let out = Command::new(tool).args(args).arg(&plain).output().unwrap_or_else(|e| panic!("{tool}: {e}"));
+        let out = Command::new(common::resolve(tool)).args(args).arg(&plain).output().unwrap_or_else(|e| panic!("{tool}: {e}"));
         assert!(out.status.success(), "{tool} failed: {}", String::from_utf8_lossy(&out.stderr));
 
         let archive = dir.join(name);
@@ -647,7 +645,7 @@ fn creating_a_large_archive_does_not_grow_with_the_tree() {
     }
 
     for kind in ArchiveType::ALL.into_iter().filter(|k| k.can_write()) {
-        let archive = dir.join(format!("bounded{}", kind.extension().clone()));
+        let archive = dir.join(format!("bounded{}", kind.extension()));
         let made = Archive::new(&archive).set_type(kind.clone()).create_from([dir.join("src")]).unwrap_or_else(|e| panic!("{kind:?}: {e}"));
         let kk = kind;
 
@@ -711,7 +709,7 @@ fn tools_read_the_wrappers_we_write_in_parallel() {
         let archive = dir.join(name);
         Archive::new(&archive).set_type(kind).create_from([dir.join("src")]).unwrap();
 
-        let checked = Command::new(tool).arg("-t").arg(&archive).status().unwrap();
+        let checked = Command::new(common::resolve(tool)).arg("-t").arg(&archive).status().unwrap();
         assert!(checked.success(), "{name}: {tool} -t rejected the stream");
 
         let out = dir.join(format!("{name}-gnu"));

@@ -3,7 +3,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::pipeline::layout::{self, Claim, Claims, Rejected, create_directory, should_write};
-use crate::pipeline::{ExtractOptions, ExtractSummary, UnsafeEntries, pool, thread_count};
+use crate::pipeline::{ExtractOptions, ExtractSummary, Restore, UnsafeEntries, pool, thread_count};
 use crate::platform::{EntryKind, EntryMeta, policy, sys};
 use crate::utils::error::{Error, PathRejection, Result};
 use crate::utils::io::COPY_BUF;
@@ -21,6 +21,7 @@ struct Planned {
 }
 
 pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: &Reporter) -> Result<ExtractSummary> {
+    let restore = Restore::new(options);
     let volumes = VolumeSet::discover(archive)?;
     let mut reader = ZipReader::with_layout(volumes.open()?, volumes.layout().clone())?;
 
@@ -76,10 +77,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
         let out = out.into_inner().map_err(|e| Error::Io(e.into_error()))?;
         drop(out);
 
-        if options.preserve_permissions {
-            sys::apply_permissions(&target, &item.meta)?;
-            sys::apply_times(&target, &item.meta)?;
-        }
+        restore.apply(&target, &item.meta)?;
 
         written.fetch_add(item.range.uncompressed_size, std::sync::atomic::Ordering::Relaxed);
         reporter.finish_entry();
@@ -118,23 +116,24 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
             }
 
             sys::create_symlink(&link_target, &target_path)?;
+            restore.apply(&target_path, &item.meta)?;
             summary.symlinks += 1;
         }
     }
 
-    if options.preserve_permissions {
+    if restore.anything() {
         let mut dirs: Vec<&Planned> = plan.iter().filter(|p| p.kind == EntryKind::Directory).collect();
         dirs.sort_by_key(|d| std::cmp::Reverse(d.path.components().count()));
 
         for item in dirs {
             let target = root.join(&item.path);
             if target.exists() {
-                sys::apply_permissions(&target, &item.meta)?;
-                sys::apply_times(&target, &item.meta)?;
+                restore.apply(&target, &item.meta)?;
             }
         }
     }
 
+    summary.owners_not_restored = restore.refused();
     reporter.finish();
     Ok(summary)
 }

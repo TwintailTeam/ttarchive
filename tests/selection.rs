@@ -181,7 +181,7 @@ fn selection_and_progress_hold_for_read_only_formats() {
         let plain = dir.join("plain.tar");
         Archive::new(&plain).set_type(ArchiveType::Tar).create_from([&source]).unwrap();
 
-        let packed = Command::new(tool).args(&args).arg(&plain).output().unwrap();
+        let packed = Command::new(common::resolve(tool)).args(&args).arg(&plain).output().unwrap();
         assert!(packed.status.success(), "{tool} failed");
         let archive = dir.join(format!("a.{suffix}"));
         std::fs::write(&archive, &packed.stdout).unwrap();

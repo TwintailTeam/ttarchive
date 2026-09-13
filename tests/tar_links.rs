@@ -6,11 +6,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
 
+use common::have;
 use ttarchive::{Archive, ArchiveType, Overwrite};
-
-fn have(tool: &str) -> bool {
-    Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
-}
 
 fn linked_tree(dir: &common::TempDir) -> std::path::PathBuf {
     let first = dir.write("src/a-first.txt", b"shared body, stored exactly once");

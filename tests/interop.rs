@@ -2,22 +2,14 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use common::{TempDir, compressible, pseudo_random};
+use common::{TempDir, compressible, have, pseudo_random, skip};
 use ttarchive::codecs::Level;
 use ttarchive::{Archive, ArchiveType, EncryptionMethod};
 
-fn have(tool: &str) -> bool {
-    Command::new("sh").arg("-c").arg(format!("command -v {tool}")).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
-}
-
-fn skip(tool: &str) {
-    println!("skipping: {tool} is not installed");
-}
-
 fn run(dir: &Path, program: &str, args: &[&str]) -> (bool, String) {
-    let output = Command::new(program).args(args).current_dir(dir).output().unwrap_or_else(|e| panic!("failed to run {program}: {e}"));
+    let output = Command::new(common::resolve(program)).args(args).current_dir(dir).output().unwrap_or_else(|e| panic!("failed to run {program}: {e}"));
 
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));

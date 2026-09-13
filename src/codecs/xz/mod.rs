@@ -1,8 +1,8 @@
 pub mod encode;
-pub mod filters;
 
 use std::io::Read;
 
+use crate::codecs::bcj;
 use crate::codecs::lzma::lzma2::{Lzma2Decoder, dictionary_size};
 use crate::crypto::sha256::Sha256;
 use crate::utils::crc32::Crc32;
@@ -285,7 +285,7 @@ impl BlockHeader {
     fn decode(&self, data: &[u8], size_hint: Option<u64>) -> Result<Vec<u8>> {
         let (compressor_id, compressor_props) = self.filters.last().ok_or_else(|| Error::malformed("xz block declares no filters"))?;
 
-        if *compressor_id != filters::LZMA2 {
+        if *compressor_id != bcj::LZMA2 {
             return Err(Error::Unsupported(Unsupported::Other("an xz block whose final filter is not LZMA2")));
         }
         let dict_byte = *compressor_props.first().ok_or_else(|| Error::malformed("xz LZMA2 filter carries no properties"))?;
@@ -294,7 +294,7 @@ impl BlockHeader {
         Lzma2Decoder::new(data, dictionary_size(dict_byte)?).read_to_end(&mut out)?;
 
         for (id, props) in self.filters[..self.filters.len() - 1].iter().rev() {
-            filters::decode(*id, props, &mut out)?;
+            bcj::decode(*id, props, &mut out)?;
         }
 
         Ok(out)
@@ -354,6 +354,7 @@ enum Stage<R> {
     Between(Option<R>),
     Block(Box<Lzma2Decoder<Counting<R>>>),
     Done,
+    Failed,
 }
 
 pub struct Reader<R> {
@@ -428,7 +429,7 @@ impl<R: Read> Reader<R> {
         let block = BlockHeader::parse(&header[1..header_len - 4])?;
         let (id, props) = block.filters.last().ok_or_else(|| Error::malformed("xz block declares no filters"))?;
 
-        if *id != filters::LZMA2 {
+        if *id != bcj::LZMA2 {
             return Err(Error::Unsupported(Unsupported::Other("an xz block whose final filter is not LZMA2")));
         }
         if block.filters.len() > 1 {
@@ -507,9 +508,20 @@ impl<R: Read> Read for Reader<R> {
             return Ok(0);
         }
 
+        let result = self.advance(buf);
+        if result.is_err() {
+            self.stage = Stage::Failed;
+        }
+        result
+    }
+}
+
+impl<R: Read> Reader<R> {
+    fn advance(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
             match &mut self.stage {
                 Stage::Done => return Ok(0),
+                Stage::Failed => return Err(Error::malformed("the xz stream already failed and cannot be read further").into()),
 
                 Stage::Header(slot) => {
                     let inner = slot.take().expect("a stream awaiting its header has its reader");

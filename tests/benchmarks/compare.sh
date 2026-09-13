@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Benchmark ttarchive against other ZIP implementations on identical inputs.
+# Benchmark ttarchive against other ZIP and 7z implementations on identical
+# inputs.
 #
 #   ./benchmarks/compare.sh [work-dir]
 #
@@ -26,7 +27,6 @@ cd "$WORK" || exit 1
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# Wall-clock seconds for a command, or "-" if it fails.
 timeit() {
     local start end
     start=$(date +%s.%N)
@@ -39,14 +39,9 @@ timeit() {
     awk -v a="$start" -v b="$end" 'BEGIN { printf "%.2f", b - a }'
 }
 
-# Print a row: label then one timing per tool.
 row() { printf '%-28s %10s %10s %10s %10s %10s\n' "$@"; }
 
 size_of() { stat -c %s "$1" 2>/dev/null || echo 0; }
-
-# ---------------------------------------------------------------------------
-# Corpora
-# ---------------------------------------------------------------------------
 
 echo "generating corpora in $WORK ..."
 
@@ -65,7 +60,6 @@ fi
 
 if [ ! -d corpus-many ]; then
     mkdir -p corpus-many
-    # 5000 small mixed files, ~250 MiB total.
     for i in $(seq 0 4999); do
         d="corpus-many/d$((i % 50))"
         mkdir -p "$d"
@@ -84,10 +78,6 @@ echo
 row "operation" "ttarchive" "ttar-1t" "zip/unzip" "7z" "bsdtar"
 row "---------" "---------" "-------" "---------" "--" "------"
 
-# ---------------------------------------------------------------------------
-# Create, deflate
-# ---------------------------------------------------------------------------
-
 for corpus in text noise many; do
     rm -f a-*.zip
     t_tt=$(timeit "$TTAR" create a-tt.zip "corpus-$corpus")
@@ -105,20 +95,12 @@ for corpus in text noise many; do
         "$(( $(size_of a-bt.zip) / 1048576 ))"
 done
 
-# ---------------------------------------------------------------------------
-# Create, stored (no compression) - isolates I/O and framing overhead
-# ---------------------------------------------------------------------------
-
 rm -f s-*.zip
 t_tt=$(timeit "$TTAR" create s-tt.zip corpus-noise --level store)
 t_t1=$(timeit "$TTAR" create s-t1.zip corpus-noise --level store --threads 1)
 t_zip="-"; have zip && t_zip=$(timeit zip -q -0 -r s-zip.zip corpus-noise)
 t_7z="-";  have 7z  && t_7z=$(timeit 7z a -tzip -mm=Copy -bso0 -bsp0 s-7z.zip corpus-noise)
 row "create store (noise)" "$t_tt" "$t_t1" "$t_zip" "$t_7z" "-"
-
-# ---------------------------------------------------------------------------
-# Extract
-# ---------------------------------------------------------------------------
 
 rm -f x.zip
 "$TTAR" create x.zip corpus-text >/dev/null 2>&1
@@ -140,10 +122,6 @@ t_uz="-"; have unzip  && t_uz=$(timeit unzip -q -o xm.zip -d out-uz)
 t_7z="-"; have 7z     && t_7z=$(timeit 7z x -y -bso0 -bsp0 xm.zip -oout-7z)
 t_bt="-"; have bsdtar && { mkdir -p out-bt; t_bt=$(timeit bsdtar -x -f xm.zip -C out-bt); }
 row "extract deflate (many)" "$t_tt" "$t_t1" "$t_uz" "$t_7z" "$t_bt"
-
-# ---------------------------------------------------------------------------
-# Encryption
-# ---------------------------------------------------------------------------
 
 rm -f e-*.zip
 t_tt=$(timeit "$TTAR" create e-tt.zip corpus-text --password "$PW" --encryption aes256)
@@ -171,15 +149,64 @@ t_uz="-"; have unzip && t_uz=$(timeit unzip -q -o -P "$PW" z-tt.zip -d outz-uz)
 t_7z="-"; have 7z    && t_7z=$(timeit 7z x -y -bso0 -bsp0 -p"$PW" z-tt.zip -ooutz-7z)
 row "extract ZipCrypto (text)" "$t_tt" "$t_t1" "$t_uz" "$t_7z" "-"
 
-# ---------------------------------------------------------------------------
-# Multi-volume
-# ---------------------------------------------------------------------------
-
 rm -f v-*.z*
 t_tt=$(timeit "$TTAR" create v-tt.zip corpus-text --volume-size 104857600)
 t_zip="-"; have zip && t_zip=$(timeit zip -q -r -s 100m v-zip.zip corpus-text)
 t_7z="-";  have 7z  && t_7z=$(timeit 7z a -tzip -bso0 -bsp0 -v100m v-7z.zip corpus-text)
 row "create split 100 MiB" "$t_tt" "-" "$t_zip" "$t_7z" "-"
+
+echo
+row "operation" "ttarchive" "ttar-1t" "7z" "7za" "bsdtar"
+row "---------" "---------" "-------" "--" "---" "------"
+
+for corpus in text noise many; do
+    rm -f q-*.7z
+    t_tt=$(timeit "$TTAR" create q-tt.7z "corpus-$corpus")
+    t_t1=$(timeit "$TTAR" create q-t1.7z "corpus-$corpus" --threads 1)
+    t_7z="-";  have 7z  && t_7z=$(timeit 7z a -bso0 -bsp0 q-7z.7z "corpus-$corpus")
+    t_7a="-";  have 7za && t_7a=$(timeit 7za a -bso0 -bsp0 q-7a.7z "corpus-$corpus")
+    t_bt="-";  have bsdtar && t_bt=$(timeit bsdtar -a -c -f q-bt.7z "corpus-$corpus")
+    row "create 7z ($corpus)" "$t_tt" "$t_t1" "$t_7z" "$t_7a" "$t_bt"
+
+    printf '%-28s %10s %10s %10s %10s %10s\n' "  archive size (MiB)" \
+        "$(( $(size_of q-tt.7z) / 1048576 ))" \
+        "$(( $(size_of q-t1.7z) / 1048576 ))" \
+        "$(( $(size_of q-7z.7z) / 1048576 ))" \
+        "$(( $(size_of q-7a.7z) / 1048576 ))" \
+        "$(( $(size_of q-bt.7z) / 1048576 ))"
+done
+
+rm -f qs-*.7z
+t_tt=$(timeit "$TTAR" create qs-tt.7z corpus-noise --level store)
+t_t1=$(timeit "$TTAR" create qs-t1.7z corpus-noise --level store --threads 1)
+t_7z="-"; have 7z && t_7z=$(timeit 7z a -bso0 -bsp0 -m0=Copy qs-7z.7z corpus-noise)
+row "create 7z store (noise)" "$t_tt" "$t_t1" "$t_7z" "-" "-"
+
+rm -f qx.7z; "$TTAR" create qx.7z corpus-text >/dev/null 2>&1
+rm -rf qout-*
+t_tt=$(timeit "$TTAR" extract qx.7z qout-tt)
+t_t1=$(timeit "$TTAR" extract qx.7z qout-t1 --threads 1)
+t_7z="-"; have 7z  && t_7z=$(timeit 7z x -y -bso0 -bsp0 qx.7z -oqout-7z)
+t_7a="-"; have 7za && t_7a=$(timeit 7za x -y -bso0 -bsp0 qx.7z -oqout-7a)
+t_bt="-"; have bsdtar && { mkdir -p qout-bt; t_bt=$(timeit bsdtar -x -f qx.7z -C qout-bt); }
+row "extract 7z (text)" "$t_tt" "$t_t1" "$t_7z" "$t_7a" "$t_bt"
+
+rm -f qe.7z
+t_tt=$(timeit "$TTAR" create qe.7z corpus-text --password "$PW")
+t_7z="-"; have 7z && t_7z=$(timeit 7z a -bso0 -bsp0 -mhe=on -p"$PW" qe-7z.7z corpus-text)
+row "create 7zAES (text)" "$t_tt" "-" "$t_7z" "-" "-"
+
+rm -rf qoute-*
+t_tt=$(timeit "$TTAR" extract qe.7z qoute-tt --password "$PW")
+t_7z="-"; have 7z && t_7z=$(timeit 7z x -y -bso0 -bsp0 -p"$PW" qe.7z -oqoute-7z)
+row "extract 7zAES (text)" "$t_tt" "-" "$t_7z" "-" "-"
+
+rm -f qv-*.7z*
+t_tt=$(timeit "$TTAR" create qv-tt.7z corpus-text --volume-size 104857600)
+t_7z="-"; have 7z && t_7z=$(timeit 7z a -bso0 -bsp0 -v100m qv-7z.7z corpus-text)
+row "create 7z split 100 MiB" "$t_tt" "-" "$t_7z" "-" "-"
+
+rm -rf qout-* qoute-* qv-*.7z* q-*.7z qs-*.7z qx.7z qe*.7z
 
 echo
 echo "corpora and archives left in $WORK (delete it to reclaim space)"

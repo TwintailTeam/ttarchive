@@ -490,7 +490,7 @@ impl<R: Read> Read for Bzip2Reader<R> {
 }
 
 pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(size_hint);
+    let mut out = Vec::with_capacity(crate::utils::limits::prealloc(size_hint as u64));
     Bzip2Reader::new(data).read_to_end(&mut out)?;
     Ok(out)
 }

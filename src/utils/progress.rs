@@ -2,46 +2,46 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// Which direction of work is being reported.
+/// Which way the work is going.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
-    /// Reading an archive and writing files out.
+    /// An archive is being extracted.
     Extract,
-    /// Reading files and writing an archive.
+    /// An archive is being written.
     Create,
 }
 
-/// A snapshot handed to the progress callback.
+/// How far along the work is, as handed to a progress callback.
 #[derive(Debug, Clone, Copy)]
 pub struct ProgressUpdate<'a> {
-    /// Whether we are extracting or creating.
+    /// Which way the work is going.
     pub operation: Operation,
 
-    /// Uncompressed bytes processed so far across all entries.
+    /// Uncompressed bytes handled so far, across every entry.
     pub processed_bytes: u64,
 
-    /// Total uncompressed bytes expected.
+    /// How many uncompressed bytes are expected in total.
     ///
-    /// Zero when the total is not known ahead of time, as for a streamed archive
-    /// whose sizes follow the data. Use [`ProgressUpdate::percent`], which
-    /// accounts for that.
+    /// Zero when that cannot be known yet, as in a streamed archive whose
+    /// sizes come after the data. [`ProgressUpdate::percent`] handles that
+    /// case for you.
     pub total_bytes: u64,
 
-    /// Entries fully finished so far.
+    /// How many entries are completely done.
     pub processed_entries: u64,
 
-    /// Total number of entries, or zero when not yet known.
+    /// How many entries there are in total, or zero when not yet known.
     pub total_entries: u64,
 
-    /// Name of the entry currently being worked on, if one is in flight.
+    /// The name of an entry being worked on, if any.
     ///
-    /// Several entries run at once with parallel workers; this reports the most
-    /// recently started one, for display only.
+    /// Workers run several entries at once, so this is the most recently
+    /// started one. Show it; do not count on it.
     pub current_entry: Option<&'a str>,
 }
 
 impl ProgressUpdate<'_> {
-    /// Completion in `0.0..=100.0`, or `None` when the total is unknown.
+    /// How far along, from `0.0` to `100.0`, or `None` if the total is unknown.
     pub fn percent(&self) -> Option<f64> {
         if self.total_bytes == 0 {
             return None;
@@ -51,10 +51,12 @@ impl ProgressUpdate<'_> {
     }
 }
 
-/// Receives progress updates.
+/// Something that can receive progress updates.
 ///
-/// Blanket-implemented for any `Fn(&ProgressUpdate<'_>) + Send + Sync`.
+/// Implemented for any `Fn(&ProgressUpdate<'_>) + Send + Sync`, so a closure
+/// will do.
 pub trait ProgressCallback: Send + Sync {
+    /// Called as the work progresses.
     fn on_progress(&self, update: &ProgressUpdate<'_>);
 }
 

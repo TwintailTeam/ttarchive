@@ -5,34 +5,41 @@ use std::path::Path;
 
 use crate::codecs::{Level, bzip2, compress, gzip, lzip, lzma, xz, zstd};
 use crate::pipeline::layout::{self, Claim, Claims, Rejected};
-use crate::pipeline::{CreateOptions, CreateSummary, ExtractOptions, ExtractSummary, MEMORY_BUDGET, pool, thread_count};
-use crate::platform::{EntryKind, sys};
+use crate::pipeline::{CreateOptions, CreateSummary, ExtractOptions, ExtractSummary, MEMORY_BUDGET, Restore, pool, thread_count};
+use crate::platform::accounts::Accounts;
+use crate::platform::{EntryKind, EntryMeta, sys};
 use crate::tar::header::{Format, Kind};
 use crate::tar::{TarReader, TarWriter};
 use crate::utils::error::{Error, Result, Unsupported};
 use crate::utils::io::COPY_BUF;
 use crate::utils::progress::Reporter;
 
-/// How a tarball's bytes are wrapped, if at all.
+/// What a tar is compressed with, if anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wrapper {
+    /// A plain `.tar`.
     None,
+    /// gzip, as in `.tar.gz`.
     Gzip,
+    /// bzip2, as in `.tar.bz2`.
     Bzip2,
+    /// xz, as in `.tar.xz`.
     Xz,
+    /// Zstandard, as in `.tar.zst`.
     Zstd,
+    /// Raw LZMA, as in `.tar.lzma`.
     Lzma,
+    /// Unix compress, as in `.tar.Z`. Read only.
     Compress,
+    /// lzip, as in `.tar.lz`.
     Lzip,
 }
 
 impl Wrapper {
-    /// Every wrapper, so callers that must cover all of them can iterate.
-    ///
-    /// A new variant has to be added here as well as to the matches below,
-    /// which the compiler will not let you skip.
+    /// Every wrapper, for callers that need to cover them all.
     pub const ALL: [Wrapper; 8] = [Wrapper::None, Wrapper::Gzip, Wrapper::Bzip2, Wrapper::Xz, Wrapper::Zstd, Wrapper::Lzma, Wrapper::Compress, Wrapper::Lzip];
 
+    /// Whether this build can write this wrapper, not just read it.
     pub fn can_write(self) -> bool {
         match self {
             Wrapper::None | Wrapper::Gzip | Wrapper::Bzip2 | Wrapper::Lzma | Wrapper::Xz | Wrapper::Zstd | Wrapper::Lzip => true,
@@ -97,8 +104,8 @@ impl Wrapper {
         match self {
             Wrapper::Gzip => gzip::compress(piece, level, &gzip::Member::default()),
             Wrapper::Bzip2 => bzip2::compress(piece, level.bzip2_block_size()),
-            Wrapper::Xz => xz::encode::compress_at(piece, search_depth(level), level),
-            Wrapper::Zstd => zstd::encode::compress_at(piece, true, search_depth(level)),
+            Wrapper::Xz => xz::encode::compress_at(piece, level.search_depth(), level),
+            Wrapper::Zstd => zstd::encode::compress_at(piece, true, level.search_depth()),
             Wrapper::None | Wrapper::Lzma | Wrapper::Compress | Wrapper::Lzip => Err(self.unsupported()),
         }
     }
@@ -231,14 +238,6 @@ impl Access<'_> {
 
 trait ReadSeek: Read + std::io::Seek {}
 impl<T: Read + std::io::Seek> ReadSeek for T {}
-
-fn search_depth(level: Level) -> usize {
-    match level {
-        Level::None | Level::Fast => 8,
-        Level::Default => 32,
-        Level::Best => 128,
-    }
-}
 
 trait Encoding: Sized {
     fn start(out: BufWriter<File>, depth: usize, level: Level) -> Result<Self>;
@@ -507,10 +506,10 @@ impl Sink {
         Ok(match wrapper {
             Wrapper::None => Sink::Plain(file),
             w if w.splits() => Sink::Split(Box::new(Parallel::new(file, wrapper, level, threads))),
-            Wrapper::Xz => Sink::Xz(Box::new(Staged::new(file, search_depth(level), level))),
-            Wrapper::Zstd => Sink::Zstd(Box::new(Staged::new(file, search_depth(level), level))),
-            Wrapper::Lzma => Sink::Lzma(Box::new(Staged::new(file, search_depth(level), level))),
-            Wrapper::Lzip => Sink::Lzip(Box::new(Staged::new(file, search_depth(level), level))),
+            Wrapper::Xz => Sink::Xz(Box::new(Staged::new(file, level.search_depth(), level))),
+            Wrapper::Zstd => Sink::Zstd(Box::new(Staged::new(file, level.search_depth(), level))),
+            Wrapper::Lzma => Sink::Lzma(Box::new(Staged::new(file, level.search_depth(), level))),
+            Wrapper::Lzip => Sink::Lzip(Box::new(Staged::new(file, level.search_depth(), level))),
             other => return Err(other.unsupported()),
         })
     }
@@ -557,9 +556,11 @@ where
     {
         let sink = Sink::open(archive, wrapper, options.level, options.threads)?;
         let mut tar = TarWriter::with_format(sink, Format::Pax);
+        let accounts = Accounts::load();
 
         for (index, source) in sources.iter().enumerate() {
-            let (name, path, meta, size) = (&source.name, &source.path, &source.meta, &source.size);
+            let named = with_owner_names(&source.meta, &accounts);
+            let (name, path, meta, size) = (&source.name, &source.path, &named, &source.size);
             reporter.start_entry(name);
 
             if let Some(target) = links.get(&index) {
@@ -676,13 +677,13 @@ struct Body {
     target: std::path::PathBuf,
 }
 
-fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &ExtractOptions, reporter: &Reporter) -> Result<u64> {
+fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &ExtractOptions, restore: &Restore, reporter: &Reporter) -> Result<u64> {
     if bodies.is_empty() {
         return Ok(0);
     }
 
     let Some(access) = source.random_access() else {
-        return write_bodies_in_order(source, found, bodies, options, reporter);
+        return write_bodies_in_order(source, found, bodies, restore, reporter);
     };
 
     let written = std::sync::atomic::AtomicU64::new(0);
@@ -724,10 +725,7 @@ fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &E
             entry.stored
         };
 
-        if options.preserve_permissions {
-            sys::apply_permissions(&body.target, &entry.meta)?;
-            sys::apply_times(&body.target, &entry.meta)?;
-        }
+        restore.apply(&body.target, &entry.meta)?;
 
         written.fetch_add(produced, std::sync::atomic::Ordering::Relaxed);
         reporter.finish_entry();
@@ -737,7 +735,7 @@ fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &E
     Ok(written.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], options: &ExtractOptions, reporter: &Reporter) -> Result<u64> {
+fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], restore: &Restore, reporter: &Reporter) -> Result<u64> {
     let wanted: HashMap<usize, &Body> = bodies.iter().map(|body| (body.index, body)).collect();
 
     let mut reader = TarReader::new(source.reader()?);
@@ -767,10 +765,7 @@ fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], op
             out.flush()?;
         }
 
-        if options.preserve_permissions {
-            sys::apply_permissions(&body.target, &found[slot].meta)?;
-            sys::apply_times(&body.target, &found[slot].meta)?;
-        }
+        restore.apply(&body.target, &found[slot].meta)?;
 
         reporter.finish_entry();
     }
@@ -779,6 +774,7 @@ fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], op
 }
 
 pub fn extract(archive: &Path, dest: &Path, wrapper: Wrapper, options: &ExtractOptions, reporter: &Reporter) -> Result<ExtractSummary> {
+    let restore = Restore::new(options);
     layout::check_destination(dest)?;
     fs::create_dir_all(dest)?;
     let root = fs::canonicalize(dest)?;
@@ -864,6 +860,7 @@ pub fn extract(archive: &Path, dest: &Path, wrapper: Wrapper, options: &ExtractO
                     continue;
                 }
                 sys::create_symlink(&entry.linkname, &target)?;
+                restore.apply(&target, &entry.meta)?;
                 summary.symlinks += 1;
             }
 
@@ -882,7 +879,7 @@ pub fn extract(archive: &Path, dest: &Path, wrapper: Wrapper, options: &ExtractO
     }
 
     summary.files += bodies.len() as u64;
-    summary.bytes += write_bodies(&source, &found, &bodies, options, reporter)?;
+    summary.bytes += write_bodies(&source, &found, &bodies, options, &restore, reporter)?;
 
     for (relative, link_target) in pending_links {
         let path = root.join(&relative);
@@ -905,21 +902,29 @@ pub fn extract(archive: &Path, dest: &Path, wrapper: Wrapper, options: &ExtractO
         summary.hardlinks += 1;
     }
 
-    if options.preserve_permissions {
+    if restore.anything() {
         directories.sort_by_key(|(relative, _)| std::cmp::Reverse(relative.components().count()));
 
         for (relative, index) in &directories {
             let target = root.join(relative);
             if target.exists() {
-                sys::apply_permissions(&target, &found[*index].meta)?;
-                sys::apply_times(&target, &found[*index].meta)?;
+                restore.apply(&target, &found[*index].meta)?;
             }
         }
     }
 
     summary.skipped += rejected.skipped();
+    summary.owners_not_restored = restore.refused();
     reporter.finish();
     Ok(summary)
+}
+
+fn with_owner_names(meta: &EntryMeta, accounts: &Accounts) -> EntryMeta {
+    EntryMeta {
+        user: meta.user.clone().or_else(|| meta.uid.and_then(|id| accounts.user_name(id)).map(str::to_owned)),
+        group: meta.group.clone().or_else(|| meta.gid.and_then(|id| accounts.group_name(id)).map(str::to_owned)),
+        ..meta.clone()
+    }
 }
 
 pub fn entries(archive: &Path, wrapper: Wrapper) -> Result<Vec<crate::pipeline::entry::Entry>> {

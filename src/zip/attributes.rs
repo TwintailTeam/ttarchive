@@ -26,6 +26,8 @@ pub fn decode(external: u32, version_made_by: u16, name_is_dir: bool, extra: &Ex
         ctime: extra.ctime,
         uid: extra.uid,
         gid: extra.gid,
+        user: None,
+        group: None,
     }
 }
 

@@ -2,17 +2,14 @@ mod common;
 
 use std::process::Command;
 
+use common::have;
 use ttarchive::codecs::{compress, lzip, lzma};
-
-fn have(tool: &str) -> bool {
-    Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
-}
 
 fn run(tool: &str, args: &[&str], input: &[u8], dir: &common::TempDir) -> Vec<u8> {
     let raw = dir.join("in.bin");
     std::fs::write(&raw, input).unwrap();
 
-    let out = Command::new(tool).args(args).arg(&raw).output().unwrap_or_else(|e| panic!("run {tool}: {e}"));
+    let out = Command::new(common::resolve(tool)).args(args).arg(&raw).output().unwrap_or_else(|e| panic!("run {tool}: {e}"));
     assert!(out.status.success(), "{tool} failed: {}", String::from_utf8_lossy(&out.stderr));
     out.stdout
 }
@@ -789,4 +786,99 @@ fn the_streaming_xz_reader_reads_a_multi_block_stream() {
 
     let got = xz_streamed(&packed).unwrap();
     assert!(got == plain, "multi-block streaming returned {} of {} bytes", got.len(), plain.len());
+}
+
+struct Stutter<R> {
+    inner: R,
+    interrupt: bool,
+}
+
+impl<R: std::io::Read> std::io::Read for Stutter<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.interrupt = !self.interrupt;
+        if self.interrupt {
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        let end = buf.len().min(5);
+        self.inner.read(&mut buf[..end])
+    }
+}
+
+fn gzip_members(parts: &[&[u8]]) -> Vec<u8> {
+    let mut packed = Vec::new();
+    for part in parts {
+        packed.extend(ttarchive::codecs::gzip::compress(part, ttarchive::codecs::Level::Default, &ttarchive::codecs::gzip::Member::default()).unwrap());
+    }
+    packed
+}
+
+fn read_after_failure(reader: &mut impl std::io::Read, what: &str) {
+    let mut got = Vec::new();
+    assert!(reader.read_to_end(&mut got).is_err(), "{what}: the damage was not reported");
+    let mut again = [0u8; 64];
+    for attempt in 0..3 {
+        assert!(reader.read(&mut again).is_err(), "{what}: read {attempt} after the failure did not report it again");
+    }
+}
+
+#[test]
+fn the_gzip_reader_keeps_failing_after_a_broken_member_header() {
+    let first = common::compressible(50_000);
+    let mut packed = gzip_members(&[&first, b"second member"]);
+    let second = packed.len() - gzip_members(&[b"second member"]).len();
+    packed[second] = 0x00;
+
+    read_after_failure(&mut ttarchive::codecs::gzip::GzipReader::new(packed.as_slice()), "bad second magic");
+}
+
+#[test]
+fn the_gzip_reader_keeps_failing_after_a_bad_trailer() {
+    let mut packed = gzip_members(&[&common::compressible(50_000)]);
+    let crc = packed.len() - 8;
+    packed[crc] ^= 0xff;
+
+    read_after_failure(&mut ttarchive::codecs::gzip::GzipReader::new(packed.as_slice()), "bad crc");
+}
+
+#[test]
+fn the_gzip_reader_rides_out_interrupted_reads() {
+    use std::io::Read;
+
+    let first = common::compressible(40_000);
+    let second = common::pseudo_random(3_000, 9);
+    let packed = gzip_members(&[&first, &second]);
+
+    let mut got = Vec::new();
+    ttarchive::codecs::gzip::GzipReader::new(Stutter { inner: packed.as_slice(), interrupt: false }).read_to_end(&mut got).unwrap();
+
+    assert!(got == [first, second].concat(), "interrupted reads changed the output");
+}
+
+#[test]
+fn the_xz_reader_keeps_failing_after_a_broken_block_header() {
+    let mut packed = ttarchive::codecs::xz::encode::compress_default(&common::compressible(50_000), 16).unwrap();
+    packed[13] ^= 0xff;
+
+    read_after_failure(&mut ttarchive::codecs::xz::Reader::new(packed.as_slice(), 0), "bad block header");
+}
+
+#[test]
+fn the_xz_reader_keeps_failing_after_a_bad_stream_header() {
+    let mut packed = ttarchive::codecs::xz::encode::compress_default(b"tiny", 16).unwrap();
+    packed[8] ^= 0xff;
+
+    read_after_failure(&mut ttarchive::codecs::xz::Reader::new(packed.as_slice(), 0), "bad stream header");
+}
+
+#[test]
+fn the_xz_reader_rides_out_interrupted_reads() {
+    use std::io::Read;
+
+    let data = common::compressible(40_000);
+    let packed = ttarchive::codecs::xz::encode::compress_default(&data, 16).unwrap();
+
+    let mut got = Vec::new();
+    ttarchive::codecs::xz::Reader::new(Stutter { inner: packed.as_slice(), interrupt: false }, 0).read_to_end(&mut got).unwrap();
+
+    assert!(got == data, "interrupted reads changed the output");
 }

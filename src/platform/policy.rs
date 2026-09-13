@@ -2,10 +2,17 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::utils::error::PathRejection;
 
+/// How strict to be about the names an archive holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NamePolicy {
+    /// Refuse any name Windows would refuse, on every platform.
+    ///
+    /// That covers reserved device names like `CON`, characters such as `:` and
+    /// `?`, and names ending in a space or a dot. Use this when the extracted
+    /// files have to be portable.
     Strict,
 
+    /// Refuse only what the platform you are on refuses. This is the default.
     #[default]
     Native,
 }

@@ -1,4 +1,4 @@
-use crate::codecs::ppmd::range::RangeDecoder;
+use crate::codecs::ppmd::i::range::RangeDecoder;
 use std::io::Read;
 
 const UNIT_SIZE: u32 = 12;
@@ -128,7 +128,7 @@ impl<R: Read> Ppmd8<R> {
 
         let mut model = Ppmd8 {
             rc: RangeDecoder::new(inner)?,
-            base: vec![0u8; (align_offset + mem_size) as usize + UNIT_SIZE as usize],
+            base: crate::utils::limits::zeroed((align_offset + mem_size) as usize + UNIT_SIZE as usize)?,
             size: mem_size,
             align_offset,
             min_context: 0,

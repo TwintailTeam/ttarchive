@@ -2,13 +2,10 @@ mod common;
 
 use std::process::Command;
 
+use common::have;
 use ttarchive::codecs::Level;
 use ttarchive::codecs::lzma::{Properties, alone, lzma2};
 use ttarchive::codecs::{xz, zstd};
-
-fn have(tool: &str) -> bool {
-    Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
-}
 
 fn mixed(len: usize, seed: u32) -> Vec<u8> {
     let noise = common::pseudo_random(len / 4, seed);
@@ -261,7 +258,7 @@ fn a_tarball_past_the_streaming_threshold_still_round_trips() {
             eprintln!("skipping the external half: {tool} is not installed");
             continue;
         }
-        let out = Command::new(tool).arg("-t").arg(&archive).output().expect("run the tool");
+        let out = Command::new(common::resolve(tool)).arg("-t").arg(&archive).output().expect("run the tool");
         assert!(out.status.success(), "{name}: {tool} -t rejected it: {}", String::from_utf8_lossy(&out.stderr));
     }
 }

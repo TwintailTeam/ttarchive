@@ -2,62 +2,104 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+/// A `Result` whose error is this crate's [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Everything that can go wrong while reading or writing an archive.
+/// Everything that can go wrong reading or writing an archive.
 #[derive(Debug)]
 pub enum Error {
-    /// An underlying I/O failure.
+    /// The file system said no.
     Io(io::Error),
-    /// The byte stream is not a well-formed archive of the expected format.
-    Malformed { detail: String, at: Option<u64> },
-    /// The archive is well formed but uses a feature this crate does not implement.
+
+    /// The archive does not say what the format says it should.
+    Malformed {
+        /// What was wrong.
+        detail: String,
+        /// Where in the file, when that is known.
+        at: Option<u64>,
+    },
+
+    /// The archive uses something this build cannot handle.
     Unsupported(Unsupported),
-    /// A stored checksum did not match the data that was actually read.
-    ChecksumMismatch { entry: String, expected: u32, found: u32 },
-    /// A decompressed entry did not have the length its metadata promised.
-    SizeMismatch { entry: String, expected: u64, found: u64 },
-    /// An entry name would escape the extraction directory, or is otherwise unsafe.
-    UnsafeEntryPath { name: String, reason: PathRejection },
-    /// The archive format could not be determined from magic bytes or extension.
-    UnknownFormat { path: Option<PathBuf> },
-    /// A worker thread panicked during parallel processing.
+
+    /// An entry's contents do not match the checksum stored with them.
+    ChecksumMismatch {
+        /// The entry's name.
+        entry: String,
+        /// The checksum the archive recorded.
+        expected: u32,
+        /// The checksum its bytes actually have.
+        found: u32,
+    },
+
+    /// An entry's contents are not the length stored with them.
+    SizeMismatch {
+        /// The entry's name.
+        entry: String,
+        /// The length the archive recorded.
+        expected: u64,
+        /// The length it actually produced.
+        found: u64,
+    },
+
+    /// An entry would have been written outside the destination.
+    UnsafeEntryPath {
+        /// The name as the archive stored it.
+        name: String,
+        /// Why it was refused.
+        reason: PathRejection,
+    },
+
+    /// Neither the name nor the leading bytes identify a format this build
+    /// knows.
+    UnknownFormat {
+        /// The path that could not be identified.
+        path: Option<PathBuf>,
+    },
+
+    /// A worker thread panicked, so the result cannot be trusted.
     WorkerPanic,
-    /// The entry is encrypted and no password was supplied.
-    PasswordRequired { entry: String },
-    /// The supplied password is wrong.
+
+    /// An entry is encrypted and no password was given.
+    PasswordRequired {
+        /// The entry that needs one.
+        entry: String,
+    },
+
+    /// The password is wrong.
     WrongPassword,
-    /// An encrypted entry failed its authentication check, having been modified or truncated after it was written.
+
+    /// The password was right but the data has been tampered with.
     AuthenticationFailed,
 }
 
-/// The specific archive feature that is not implemented.
+/// What exactly this build cannot handle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unsupported {
-    /// Compression method number that this build cannot decode.
+    /// A compression method, by its number.
     CompressionMethod(u16),
-    /// Entry is encrypted and no decryption is implemented.
+    /// An encryption scheme this build does not implement.
     Encryption,
-    /// Strong or central directory encryption.
+    /// PKWARE's proprietary strong encryption.
     StrongEncryption,
-    /// Multi-disk split or spanned archive.
+    /// A split archive in a shape this build cannot follow.
     SplitArchive,
-    /// A named feature that is recognised but not handled.
+    /// Something else, described in place.
     Other(&'static str),
 }
 
-/// Why an entry name was refused.
+/// Why an entry's name was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathRejection {
-    /// Name is absolute (leading `/` or a `C:` style drive prefix).
+    /// The name is an absolute path, or names a drive.
     Absolute,
-    /// Name contains a `..` component that walks above the destination.
+    /// The name climbs out of the destination with `..`.
     ParentTraversal,
-    /// Name contains a NUL byte or another character illegal in a path.
+    /// The name holds a character the platform will not accept.
     IllegalCharacter,
-    /// Name is empty.
+    /// The name is empty.
     Empty,
-    /// Entry is a symlink whose target resolves outside the destination.
+    /// A symbolic link points outside the destination.
     SymlinkEscape,
 }
 
@@ -70,12 +112,12 @@ impl Error {
         Error::Malformed { detail: detail.into(), at: Some(at) }
     }
 
-    /// True when the failure is an unimplemented feature rather than bad data.
+    /// Whether this is a missing feature rather than a broken archive.
     pub fn is_unsupported(&self) -> bool {
         matches!(self, Error::Unsupported(_))
     }
 
-    /// True when the operation failed only for want of a correct password.
+    /// Whether the right password is all that was missing.
     pub fn needs_password(&self) -> bool {
         matches!(self, Error::PasswordRequired { .. } | Error::WrongPassword)
     }
