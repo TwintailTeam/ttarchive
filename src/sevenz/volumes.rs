@@ -58,7 +58,7 @@ impl VolumeSet {
         let mut cursor = 0u64;
 
         for path in &paths {
-            let len = fs::metadata(path)?.len();
+            let len = crate::utils::io::named(fs::metadata(path), path)?.len();
             starts.push(cursor);
             lengths.push(len);
             cursor += len;
@@ -144,7 +144,7 @@ impl Read for SpanReader {
         while self.at < self.pieces.len() {
             if self.open.is_none() {
                 let (path, offset, len) = &self.pieces[self.at];
-                self.open = Some(SectionReader::new(File::open(path)?, *offset, *len)?);
+                self.open = Some(SectionReader::new(crate::utils::io::open(path)?, *offset, *len)?);
             }
 
             let reader = self.open.as_mut().expect("a piece is open");
@@ -231,7 +231,7 @@ impl VolumeSink {
 
     fn add_volume(&mut self) -> io::Result<()> {
         let path = volume_name(&self.base, self.paths.len() + 1);
-        let file = File::create(&path)?;
+        let file = crate::utils::io::create(&path)?;
 
         self.open = Some((self.paths.len(), file));
         self.paths.push(path);
@@ -248,7 +248,7 @@ impl VolumeSink {
             if let Some((_, file)) = &mut self.open {
                 file.flush()?;
             }
-            let file = OpenOptions::new().write(true).open(&self.paths[index])?;
+            let file = crate::utils::io::named(OpenOptions::new().write(true).open(&self.paths[index]), &self.paths[index])?;
             self.open = Some((index, file));
         }
 

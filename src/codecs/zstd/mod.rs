@@ -178,7 +178,9 @@ impl<R: Read> Reader<R> {
 
         if (SKIPPABLE_MAGIC_LOW..=SKIPPABLE_MAGIC_HIGH).contains(&magic) {
             let mut size = [0u8; 4];
-            self.exactly(&mut size)?;
+            if !self.exactly(&mut size)? {
+                return Err(Error::malformed("zstd skippable frame has no length"));
+            }
             let size = u32::from_le_bytes(size) as u64;
             std::io::copy(&mut (&mut self.inner).take(size), &mut std::io::sink())?;
             return Ok(());
@@ -189,11 +191,13 @@ impl<R: Read> Reader<R> {
         }
 
         let mut descriptor = [0u8; 1];
-        self.exactly(&mut descriptor)?;
+        if !self.exactly(&mut descriptor)? {
+            return Err(Error::malformed("zstd stream ends before its frame header"));
+        }
         let mut header = vec![0u8; FrameHeader::length_of(descriptor[0])];
         header[0] = descriptor[0];
-        if header.len() > 1 {
-            self.exactly(&mut header[1..])?;
+        if header.len() > 1 && !self.exactly(&mut header[1..])? {
+            return Err(Error::malformed("zstd frame header is truncated"));
         }
 
         let parsed = FrameHeader::parse(&header)?;
@@ -216,7 +220,9 @@ impl<R: Read> Reader<R> {
 
     fn block(&mut self) -> Result<()> {
         let mut head = [0u8; 3];
-        self.exactly(&mut head)?;
+        if !self.exactly(&mut head)? {
+            return Err(Error::malformed("zstd stream ends before a block header"));
+        }
         let value = head[0] as u32 | ((head[1] as u32) << 8) | ((head[2] as u32) << 16);
 
         let last = value & 1 != 0;
@@ -228,8 +234,8 @@ impl<R: Read> Reader<R> {
             return Err(Error::malformed(format!("zstd block claims {stored} bytes, past the format's limit")));
         }
         let mut body = vec![0u8; stored];
-        if stored > 0 {
-            self.exactly(&mut body)?;
+        if stored > 0 && !self.exactly(&mut body)? {
+            return Err(Error::malformed("zstd block ends before the bytes it declares"));
         }
 
         let open = self.open.as_mut().expect("a frame is open");
@@ -269,7 +275,9 @@ impl<R: Read> Reader<R> {
 
         if let Some(expected) = expected {
             let mut stored = [0u8; 4];
-            self.exactly(&mut stored)?;
+            if !self.exactly(&mut stored)? {
+                return Err(Error::malformed("zstd frame ends before its checksum"));
+            }
             if expected != u32::from_le_bytes(stored) {
                 return Err(Error::malformed("zstd frame failed its content checksum"));
             }

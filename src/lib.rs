@@ -608,7 +608,12 @@ impl Archive {
             }
         }
 
-        ArchiveType::from_extension(&self.path).ok_or_else(|| Error::UnknownFormat { path: Some(self.path.clone()) })
+        ArchiveType::from_extension(&self.path).ok_or_else(|| {
+            if self.path.exists() {
+                return Error::UnknownFormat { path: Some(self.path.clone()) };
+            }
+            Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{}: no such archive", self.path.display())))
+        })
     }
 
     fn resolve_for_write(&self) -> Result<ArchiveType> {

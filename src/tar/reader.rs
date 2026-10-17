@@ -305,7 +305,7 @@ impl<R: Read> TarReader<R> {
             return Ok(Vec::new());
         }
 
-        let mut data = vec![0u8; stored as usize];
+        let mut data = sparse::room_for(stored, "entry")?;
         if stored > 0 && !self.read_exact_tracked(&mut data)? {
             return Err(Error::malformed(format!("tar entry {:?} ends early", entry.name)));
         }

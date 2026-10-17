@@ -68,7 +68,7 @@ pub fn create<I: IntoIterator<Item = P>, P: AsRef<Path>>(archive: &Path, inputs:
         }
 
         None => {
-            let out = File::create(archive)?;
+            let out = crate::utils::io::create(archive)?;
             let sink = SingleSink(BufWriter::with_capacity(COPY_BUF, out));
             let mut writer = ZipWriter::new(sink)?;
             configure(&mut writer, options);
@@ -316,6 +316,7 @@ pub fn collect(path: &Path, base: &Path, out: &mut Vec<Source>, options: &Create
             *specials += 1;
             return Ok(());
         }
+        Err(Error::Io(e)) => return Err(Error::Io(std::io::Error::new(e.kind(), format!("{}: {e}", path.display())))),
         Err(e) => return Err(e),
     };
 

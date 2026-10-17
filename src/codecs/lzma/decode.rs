@@ -133,6 +133,9 @@ impl LzmaCore {
 
     pub fn decode<R: Read>(&mut self, rc: &mut RangeDecoder<R>, window: &mut Window, limit: u64) -> Result<Stop> {
         while window.total() < limit {
+            if rc.is_starved() {
+                return Err(Error::malformed("lzma stream ends before the size it declares"));
+            }
             let pos_state = (window.total() as usize) & ((1 << self.props.pb) - 1);
             let match_index = (self.state << MAX_POS_BITS) + pos_state;
 

@@ -155,11 +155,11 @@ pub fn create_directory(root: &Path, relative: &Path) -> Result<()> {
                 return Err(Error::UnsafeEntryPath { name: current.display().to_string(), reason: PathRejection::SymlinkEscape });
             }
             Ok(_) => {
-                fs::remove_file(&current)?;
-                fs::create_dir(&current)?;
+                crate::utils::io::named(fs::remove_file(&current), &current)?;
+                crate::utils::io::named(fs::create_dir(&current), &current)?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&current)?;
+                crate::utils::io::named(fs::create_dir(&current), &current)?;
             }
             Err(e) => return Err(Error::from(e)),
         }

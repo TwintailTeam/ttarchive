@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs;
 use std::io::{self, BufWriter, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -108,7 +108,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
     for item in plan.iter().filter(|p| p.kind == EntryKind::File && p.location.is_none()) {
         let target = root.join(&item.path);
         if should_write(&target, options.overwrite)? {
-            File::create(&target)?;
+            crate::utils::io::create(&target)?;
             summary.files += 1;
             restore.apply(&target, &item.meta)?;
         } else {
@@ -160,7 +160,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
                 }
 
                 reporter.start_entry(&item.name);
-                let mut out = BufWriter::with_capacity(COPY_BUF, File::create(&target)?);
+                let mut out = BufWriter::with_capacity(COPY_BUF, crate::utils::io::create(&target)?);
                 copy_entry(&mut stream, &mut out, location, &item.name, reporter, buffer)?;
                 out.flush()?;
                 drop(out);
@@ -429,7 +429,7 @@ pub fn create<I: IntoIterator<Item = P>, P: AsRef<Path>>(archive: &Path, inputs:
         }
 
         None => {
-            let out = BufWriter::with_capacity(COPY_BUF, File::create(archive)?);
+            let out = BufWriter::with_capacity(COPY_BUF, crate::utils::io::create(archive)?);
             let mut writer = SevenZWriter::new(out, write_options(options, packing))?;
             fill(&mut writer, &sources, &mut summary, reporter)?;
 
@@ -458,7 +458,7 @@ fn fill<W: Write + Seek>(writer: &mut SevenZWriter<W>, sources: &[create::Source
                 summary.symlinks += 1;
             }
             EntryKind::File => {
-                let mut file = File::open(&source.path)?;
+                let mut file = crate::utils::io::open(&source.path)?;
                 writer.add_stream(&item(source, attributes_of(&source.meta)), &mut file, source.size)?;
                 reporter.add_bytes(source.size);
                 summary.bytes += source.size;

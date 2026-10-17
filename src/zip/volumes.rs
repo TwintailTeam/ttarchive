@@ -90,7 +90,7 @@ impl VolumeSet {
             return Ok(set);
         }
 
-        let len = fs::metadata(path)?.len();
+        let len = crate::utils::io::named(fs::metadata(path), path)?.len();
         Ok(VolumeSet { paths: vec![path.to_path_buf()], layout: VolumeLayout::single(len) })
     }
 
@@ -200,7 +200,7 @@ fn layout_for(paths: &[PathBuf], scheme: Scheme) -> Result<VolumeLayout> {
     let mut cursor = 0u64;
 
     for path in paths {
-        let len = fs::metadata(path)?.len();
+        let len = crate::utils::io::named(fs::metadata(path), path)?.len();
         starts.push(cursor);
         lengths.push(len);
         cursor += len;
@@ -235,7 +235,7 @@ impl SegmentedReader {
     fn focus(&mut self, index: usize, local: u64) -> io::Result<&mut File> {
         let needs_open = !matches!(&self.open, Some((i, _)) if *i == index);
         if needs_open {
-            let file = File::open(&self.paths[index])?;
+            let file = crate::utils::io::open(&self.paths[index])?;
             self.open = Some((index, file));
         }
         let (_, file) = self.open.as_mut().expect("just opened");
@@ -360,7 +360,7 @@ impl VolumeSink {
     fn add_volume(&mut self) -> io::Result<()> {
         let index = self.files.len() + 1;
         let path = split_volume_name(&self.base, index);
-        let file = File::create(&path)?;
+        let file = crate::utils::io::create(&path)?;
 
         let start = self.starts.last().copied().unwrap_or(0) + self.lengths.last().copied().unwrap_or(0);
         self.starts.push(start);

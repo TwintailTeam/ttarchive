@@ -1,5 +1,11 @@
 use crate::tar::pax::Attributes;
 use crate::utils::error::{Error, Result};
+use crate::utils::limits;
+
+pub fn room_for(declared: u64, what: &str) -> Result<Vec<u8>> {
+    let len = usize::try_from(declared).map_err(|_| Error::malformed(format!("tar {what} claims {declared} bytes, more than this build can address")))?;
+    limits::zeroed(len)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Segment {
@@ -219,7 +225,7 @@ fn take_segments(area: &[u8], into: &mut Vec<Segment>) -> Result<()> {
 pub fn expand(map: &Map, stored: &[u8]) -> Result<Vec<u8>> {
     map.validate()?;
 
-    let mut out = vec![0u8; map.real_size as usize];
+    let mut out = room_for(map.real_size, "sparse entry")?;
     let mut at = 0usize;
 
     for segment in &map.segments {

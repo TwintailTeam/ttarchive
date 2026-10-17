@@ -24,7 +24,10 @@ pub struct RangeDecoder<R> {
     range: u32,
     code: u32,
     exhausted: bool,
+    synthetic: usize,
 }
+
+const STARVED_AFTER: usize = 64;
 
 impl<R: Read> RangeDecoder<R> {
     pub fn new(mut inner: R) -> Result<Self> {
@@ -42,11 +45,16 @@ impl<R: Read> RangeDecoder<R> {
             range: u32::MAX,
             code: u32::from_be_bytes([header[1], header[2], header[3], header[4]]),
             exhausted: false,
+            synthetic: 0,
         })
     }
 
     pub fn is_finished(&self) -> bool {
         self.code == 0
+    }
+
+    pub fn is_starved(&self) -> bool {
+        self.synthetic > STARVED_AFTER
     }
 
     pub fn consumed(&self) -> usize {
@@ -75,12 +83,14 @@ impl<R: Read> RangeDecoder<R> {
     #[cold]
     fn refill(&mut self) -> u8 {
         if self.exhausted {
+            self.synthetic += 1;
             return 0;
         }
         loop {
             match self.inner.read(&mut self.data) {
                 Ok(0) => {
                     self.exhausted = true;
+                    self.synthetic += 1;
                     return 0;
                 }
                 Ok(n) => {
@@ -92,6 +102,7 @@ impl<R: Read> RangeDecoder<R> {
                 Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => {
                     self.exhausted = true;
+                    self.synthetic += 1;
                     return 0;
                 }
             }

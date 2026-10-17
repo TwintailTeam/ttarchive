@@ -173,7 +173,7 @@ impl Source {
             return Ok(Source::Buffered(wrapper.decode(fs::read(path)?)?));
         }
 
-        let mut reader = wrapper.stream(BufReader::with_capacity(COPY_BUF, File::open(path)?))?;
+        let mut reader = wrapper.stream(BufReader::with_capacity(COPY_BUF, crate::utils::io::open(path)?))?;
         let mut held = Vec::new();
         let mut chunk = vec![0u8; COPY_BUF];
 
@@ -213,10 +213,10 @@ impl Source {
 
     fn reader(&self) -> Result<Box<dyn Read + '_>> {
         match self {
-            Source::Plain(path) => Ok(Box::new(BufReader::with_capacity(COPY_BUF, File::open(path)?))),
+            Source::Plain(path) => Ok(Box::new(BufReader::with_capacity(COPY_BUF, crate::utils::io::open(path)?))),
             Source::Buffered(plain) => Ok(Box::new(plain.as_slice())),
             Source::Spilled(scratch) => Ok(Box::new(BufReader::with_capacity(COPY_BUF, File::open(&scratch.path)?))),
-            Source::Reopen(path, wrapper) => wrapper.stream(BufReader::with_capacity(COPY_BUF, File::open(path)?)),
+            Source::Reopen(path, wrapper) => wrapper.stream(BufReader::with_capacity(COPY_BUF, crate::utils::io::open(path)?)),
         }
     }
 }
@@ -230,7 +230,7 @@ enum Access<'a> {
 impl Access<'_> {
     fn open(&self) -> Result<Box<dyn ReadSeek + Send + '_>> {
         Ok(match self {
-            Access::File(path) => Box::new(BufReader::with_capacity(COPY_BUF, File::open(path)?)),
+            Access::File(path) => Box::new(BufReader::with_capacity(COPY_BUF, crate::utils::io::open(path)?)),
             Access::Memory(plain) => Box::new(std::io::Cursor::new(*plain)),
         })
     }
@@ -501,7 +501,7 @@ impl Write for Sink {
 
 impl Sink {
     fn open(path: &Path, wrapper: Wrapper, level: Level, threads: Option<usize>) -> Result<Self> {
-        let file = BufWriter::with_capacity(COPY_BUF, File::create(path)?);
+        let file = BufWriter::with_capacity(COPY_BUF, crate::utils::io::create(path)?);
 
         Ok(match wrapper {
             Wrapper::None => Sink::Plain(file),
@@ -590,7 +590,7 @@ where
                 EntryKind::File => {
                     tar.start_entry(name, meta, *size, "")?;
 
-                    let mut file = File::open(path)?;
+                    let mut file = crate::utils::io::open(path)?;
                     let mut buffer = vec![0u8; COPY_BUF];
                     let mut written = 0u64;
 
@@ -698,7 +698,7 @@ fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &E
         input.seek(std::io::SeekFrom::Start(entry.offset))?;
 
         let produced = if let Some(map) = &entry.sparse {
-            let mut stored = vec![0u8; entry.stored as usize];
+            let mut stored = crate::tar::sparse::room_for(entry.stored, "entry")?;
             input.read_exact(&mut stored)?;
 
             let whole = if map.in_data {
@@ -712,7 +712,7 @@ fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &E
             reporter.add_bytes(whole.len() as u64);
             whole.len() as u64
         } else {
-            let mut out = BufWriter::with_capacity(COPY_BUF, File::create(&body.target)?);
+            let mut out = BufWriter::with_capacity(COPY_BUF, crate::utils::io::create(&body.target)?);
             let mut left = entry.stored;
             while left > 0 {
                 let want = left.min(buffer.len() as u64) as usize;
@@ -760,7 +760,7 @@ fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], re
             reporter.add_bytes(whole.len() as u64);
             written += whole.len() as u64;
         } else {
-            let mut out = BufWriter::with_capacity(COPY_BUF, File::create(&body.target)?);
+            let mut out = BufWriter::with_capacity(COPY_BUF, crate::utils::io::create(&body.target)?);
             written += reader.copy_data(&entry, &mut out, &mut buffer, |n| reporter.add_bytes(n))?;
             out.flush()?;
         }

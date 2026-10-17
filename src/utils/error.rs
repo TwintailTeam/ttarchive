@@ -130,7 +130,7 @@ impl fmt::Display for Error {
             Error::Malformed { detail, at: Some(at) } => {
                 write!(f, "malformed archive at offset {at}: {detail}")
             }
-            Error::Malformed { detail, at: _None } => write!(f, "malformed archive: {detail}"),
+            Error::Malformed { detail, at: None } => write!(f, "malformed archive: {detail}"),
             Error::Unsupported(u) => write!(f, "unsupported archive feature: {u}"),
             Error::ChecksumMismatch { entry, expected, found } => {
                 write!(f, "checksum mismatch for {entry:?}: expected {expected:#010x}, computed {found:#010x}")

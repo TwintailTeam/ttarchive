@@ -168,3 +168,73 @@ fn none_of_the_malicious_inputs_raise_the_resident_set() {
     let grown = peak_kib().saturating_sub(before);
     assert!(grown < 64 * 1024, "malicious sizes raised the peak resident set by {} MiB", grown / 1024);
 }
+
+fn sparse_tar(dir: &TempDir, name: &str, attributes: &[(&str, &str)], body: &[u8]) -> PathBuf {
+    use ttarchive::tar::header::{self, Format, Header, Kind};
+    use ttarchive::tar::pax::{self, Attributes};
+
+    let mut pax_attributes = Attributes::default();
+    for (key, value) in attributes {
+        pax_attributes.set(key, value.as_bytes().to_vec());
+    }
+    let payload = pax::encode(&pax_attributes);
+
+    let mut out = Vec::new();
+    out.extend(header::write(&Header {
+        name: b"PaxHeaders/sparse.bin".to_vec(),
+        mode: 0o644,
+        size: payload.len() as u64,
+        kind: Kind::PaxNext,
+        format: Format::Pax,
+        ..Header::default()
+    }));
+    out.extend(&payload);
+    out.resize(out.len().div_ceil(512) * 512, 0);
+
+    out.extend(header::write(&Header {
+        name: b"sparse.bin".to_vec(),
+        mode: 0o644,
+        size: body.len() as u64,
+        kind: Kind::Regular,
+        format: Format::Pax,
+        ..Header::default()
+    }));
+    out.extend(body);
+    out.resize(out.len().div_ceil(512) * 512, 0);
+    out.extend(vec![0u8; 1024]);
+
+    let archive = dir.join(name);
+    fs::write(&archive, &out).unwrap();
+    archive
+}
+
+#[test]
+fn a_sparse_entry_claiming_four_terabytes_of_holes_is_refused_rather_than_aborting() {
+    let dir = TempDir::new("sparse-realsize");
+    let archive = sparse_tar(
+        &dir,
+        "realsize.tar",
+        &[("GNU.sparse.realsize", "4000000000000"), ("GNU.sparse.map", "0,4"), ("GNU.sparse.name", "sparse.bin"), ("size", "4")],
+        b"data",
+    );
+
+    let result = Archive::new(&archive).extract_to(dir.join("out"));
+    assert!(result.is_err(), "a sparse entry claiming 4 TB of holes should be refused, got {result:?}");
+}
+
+#[test]
+fn a_sparse_entry_claiming_four_terabytes_of_stored_bytes_is_refused_rather_than_aborting() {
+    let dir = TempDir::new("sparse-stored");
+    let archive = sparse_tar(
+        &dir,
+        "stored.tar",
+        &[("GNU.sparse.major", "1"), ("GNU.sparse.minor", "0"), ("GNU.sparse.realsize", "16"), ("GNU.sparse.name", "sparse.bin"), ("size", "4000000000000")],
+        b"data",
+    );
+
+    let result = Archive::new(&archive).extract_to(dir.join("out"));
+    assert!(result.is_err(), "a sparse entry claiming 4 TB of stored bytes should be refused, got {result:?}");
+
+    let listed = Archive::new(&archive).entries();
+    assert!(listed.is_ok() || listed.is_err(), "listing must return rather than abort");
+}

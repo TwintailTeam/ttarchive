@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -70,7 +70,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
 
         reporter.start_entry(&item.name);
 
-        let out = File::create(&target)?;
+        let out = crate::utils::io::create(&target)?;
         let mut out = BufWriter::with_capacity(COPY_BUF, out);
         crate::zip::reader::read_range(&mut *source, &item.range, &item.name, &mut out, reporter, buffer, options.password.as_ref())?;
         out.flush()?;

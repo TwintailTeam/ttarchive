@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
@@ -38,7 +37,7 @@ pub struct FileSource {
 impl FileSource {
     pub fn new(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let size = std::fs::metadata(&path)?.len();
+        let size = crate::utils::io::named(std::fs::metadata(&path), &path)?.len();
         Ok(FileSource { path, size })
     }
 
@@ -50,7 +49,7 @@ impl FileSource {
 impl Source for FileSource {
     fn open(&self, start: u64, len: u64) -> Result<Box<dyn Read + Send + '_>> {
         self.check_range(start, len)?;
-        let section = SectionReader::new(File::open(&self.path)?, start, len)?;
+        let section = SectionReader::new(crate::utils::io::open(&self.path)?, start, len)?;
         Ok(Box::new(BufReader::with_capacity(STREAM_BUFFER.min(len.max(1) as usize), section)))
     }
 

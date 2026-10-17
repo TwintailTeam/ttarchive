@@ -5,6 +5,18 @@ use crate::utils::progress::Reporter;
 
 pub const COPY_BUF: usize = 128 * 1024;
 
+pub fn open(path: &std::path::Path) -> io::Result<std::fs::File> {
+    named(std::fs::File::open(path), path)
+}
+
+pub fn create(path: &std::path::Path) -> io::Result<std::fs::File> {
+    named(std::fs::File::create(path), path)
+}
+
+pub fn named<T>(result: io::Result<T>, path: &std::path::Path) -> io::Result<T> {
+    result.map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+}
+
 #[derive(Debug)]
 pub struct Limited<R> {
     inner: R,
