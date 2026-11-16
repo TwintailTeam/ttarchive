@@ -6,8 +6,7 @@ const MAX_BITS: u32 = 11;
 const SYMBOLS: usize = 256;
 
 pub struct Table {
-    symbols: Vec<u8>,
-    lengths: Vec<u8>,
+    entries: Vec<u16>,
     max_bits: u32,
 }
 
@@ -44,8 +43,7 @@ impl Table {
             return Err(Error::malformed(format!("zstd huffman code of {max_bits} bits exceeds the 11 allowed")));
         }
 
-        let mut symbols = vec![0u8; size as usize];
-        let mut lengths = vec![0u8; size as usize];
+        let mut entries = vec![0u16; size as usize];
 
         let heaviest = weights.iter().copied().max().unwrap_or(0);
         let mut position = 0usize;
@@ -56,22 +54,22 @@ impl Table {
                 if w != weight {
                     continue;
                 }
-                if position + run > symbols.len() {
+                if position + run > entries.len() {
                     return Err(Error::malformed("zstd huffman weights overflow the table"));
                 }
-                for slot in position..position + run {
-                    symbols[slot] = symbol as u8;
-                    lengths[slot] = length as u8;
+                let packed = symbol as u16 | ((length as u16) << 8);
+                for slot in &mut entries[position..position + run] {
+                    *slot = packed;
                 }
                 position += run;
             }
         }
 
-        if position != symbols.len() {
+        if position != entries.len() {
             return Err(Error::malformed("zstd huffman weights do not fill the table"));
         }
 
-        Ok(Table { symbols, lengths, max_bits })
+        Ok(Table { entries, max_bits })
     }
 
     pub fn parse(data: &[u8]) -> Result<(Self, usize)> {
@@ -127,11 +125,41 @@ impl Table {
         Ok((Table::from_weights(&weights)?, 1 + size))
     }
 
-    pub fn decode(&self, bits: &mut BackwardBits<'_>) -> u8 {
-        let index = bits.peek(self.max_bits) as usize;
-        let symbol = self.symbols[index];
-        bits.consume(self.lengths[index] as u32);
-        symbol
+    pub fn decoder(&self) -> Decoder<'_> {
+        Decoder { entries: &self.entries[..1usize << self.max_bits], max_bits: self.max_bits }
+    }
+
+    pub fn decode_into(&self, bits: &mut BackwardBits<'_>, out: &mut [u8]) {
+        let decoder = self.decoder();
+        for slot in out.iter_mut() {
+            *slot = decoder.next(bits);
+        }
+    }
+
+    fn symbol_at(&self, slot: usize) -> u8 {
+        self.entries[slot] as u8
+    }
+
+    fn length_at(&self, slot: usize) -> u8 {
+        (self.entries[slot] >> 8) as u8
+    }
+
+    fn slots(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+pub struct Decoder<'a> {
+    entries: &'a [u16],
+    max_bits: u32,
+}
+
+impl Decoder<'_> {
+    #[inline(always)]
+    pub fn next(&self, bits: &mut BackwardBits<'_>) -> u8 {
+        let entry = self.entries[bits.peek(self.max_bits) as usize];
+        bits.consume((entry >> 8) as u32);
+        entry as u8
     }
 }
 
@@ -164,9 +192,9 @@ impl Table {
         let mut next = vec![0u32; (table.max_bits + 2) as usize];
 
         let mut counts = vec![0u32; (table.max_bits + 2) as usize];
-        for slot in 0..table.symbols.len() {
-            if slot == 0 || table.symbols[slot] != table.symbols[slot - 1] {
-                counts[table.lengths[slot] as usize] += 1;
+        for slot in 0..table.slots() {
+            if slot == 0 || table.symbol_at(slot) != table.symbol_at(slot - 1) {
+                counts[table.length_at(slot) as usize] += 1;
             }
         }
 
@@ -177,9 +205,9 @@ impl Table {
         }
 
         let mut seen = vec![false; SYMBOLS];
-        for slot in 0..table.symbols.len() {
-            let symbol = table.symbols[slot] as usize;
-            let length = table.lengths[slot];
+        for slot in 0..table.slots() {
+            let symbol = table.symbol_at(slot) as usize;
+            let length = table.length_at(slot);
             if seen[symbol] || length == 0 {
                 continue;
             }

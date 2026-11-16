@@ -2,6 +2,7 @@ pub mod bytes;
 pub mod cp437;
 pub mod crc32;
 pub mod crc64;
+pub mod crc64_clmul;
 pub mod datetime;
 pub mod error;
 pub mod io;

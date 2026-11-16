@@ -1,5 +1,10 @@
 use crate::utils::error::{Error, Result};
 
+#[inline(always)]
+fn mask(count: u32) -> u64 {
+    if count >= 64 { u64::MAX } else { (1u64 << count) - 1 }
+}
+
 pub struct BackwardBits<'a> {
     data: &'a [u8],
     container: u64,
@@ -23,7 +28,18 @@ impl<'a> BackwardBits<'a> {
         Ok(reader)
     }
 
+    #[inline]
     fn pull(&mut self) {
+        if self.held <= 56 && self.next >= 8 {
+            let whole = ((64 - self.held) / 8) as usize;
+            let window = self.data[self.next - 8..self.next].try_into().unwrap_or([0; 8]);
+            let group = u64::from_le_bytes(window) >> ((8 - whole) * 8);
+            self.container = self.container.checked_shl(8 * whole as u32).unwrap_or(0) | group;
+            self.held += 8 * whole as u32;
+            self.next -= whole;
+            return;
+        }
+
         while self.held <= 56 && self.next > 0 {
             self.next -= 1;
             self.container = (self.container << 8) | self.data[self.next] as u64;
@@ -35,22 +51,30 @@ impl<'a> BackwardBits<'a> {
         self.overrun
     }
 
+    #[inline]
     pub fn peek(&mut self, count: u32) -> u64 {
+        if self.held >= count {
+            return (self.container >> (self.held - count)) & mask(count);
+        }
+        self.peek_refilled(count)
+    }
+
+    #[cold]
+    fn peek_refilled(&mut self, count: u32) -> u64 {
         if count == 0 {
             return 0;
         }
-        if self.held < count {
-            self.pull();
-        }
+        self.pull();
 
         if self.held >= count {
-            (self.container >> (self.held - count)) & ((1u64 << count) - 1)
+            (self.container >> (self.held - count)) & mask(count)
         } else {
             let short = count - self.held;
-            (self.container & ((1u64 << self.held) - 1)) << short
+            (self.container & mask(self.held)) << short
         }
     }
 
+    #[inline]
     pub fn consume(&mut self, count: u32) {
         if self.held >= count {
             self.held -= count;
@@ -60,6 +84,7 @@ impl<'a> BackwardBits<'a> {
         }
     }
 
+    #[inline]
     pub fn bits(&mut self, count: u32) -> u64 {
         let value = self.peek(count);
         self.consume(count);

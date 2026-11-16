@@ -131,6 +131,8 @@ pub fn execute(data: &[u8], literals: &[u8], target: &mut Target<'_>, tables: &m
     let stream = data.get(offset..).filter(|s| !s.is_empty()).ok_or_else(|| Error::malformed("zstd sequences have no bitstream"))?;
     let mut bits = BackwardBits::new(stream)?;
 
+    out.reserve(literals.len() + count * 8);
+
     let mut literal_state = State::new(literal_table, &mut bits);
     let mut offset_state = State::new(offset_table, &mut bits);
     let mut match_state = State::new(match_table, &mut bits);
@@ -222,8 +224,10 @@ fn emit(out: &mut Window, literals: &[u8], literal_pos: &mut usize, piece: &Piec
     let Piece { literal_length, distance, match_length } = *piece;
     let end = literal_pos.checked_add(literal_length).filter(|&e| e <= literals.len());
     let end = end.ok_or_else(|| Error::malformed("zstd sequence wants more literals than the block holds"))?;
-    out.extend(&literals[*literal_pos..end]);
-    *literal_pos = end;
+    if literal_length > 0 {
+        out.extend(&literals[*literal_pos..end]);
+        *literal_pos = end;
+    }
 
     let produced = out.history();
     if distance > produced {

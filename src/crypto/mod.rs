@@ -1,10 +1,12 @@
 pub mod aes;
 pub mod aes_ni;
 pub mod hmac;
+pub mod md5;
 pub mod random;
 pub mod sevenz_aes;
 pub mod sha1;
 pub mod sha256;
+pub mod sha512;
 pub mod stream;
 pub mod winzip_aes;
 pub mod zipcrypto;

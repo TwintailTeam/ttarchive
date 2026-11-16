@@ -245,9 +245,7 @@ impl<R: Read> Reader<R> {
             0 => self.window.extend(&body),
             1 => {
                 let byte = *body.first().ok_or_else(|| Error::malformed("zstd RLE block has no byte"))?;
-                for _ in 0..size {
-                    self.window.push(byte);
-                }
+                self.window.repeat(byte, size);
             }
             2 => decode_compressed_block(&body, &mut self.window, &mut open.frame, window_size)?,
             _ => return Err(Error::malformed("zstd block uses the reserved type 3")),
@@ -352,8 +350,12 @@ fn decode_literals(body: &[u8], frame: &mut Frame) -> Result<(Vec<u8>, usize)> {
             let table = frame.literals.as_ref().ok_or_else(|| Error::malformed("zstd treeless literals reuse a table that was never sent"))?;
 
             let payload = &section[table_len..];
-            let out =
-                if streams == 1 { decode_literal_stream(payload, table, regenerated)? } else { decode_four_literal_streams(payload, table, regenerated)? };
+            let mut out = vec![0u8; regenerated];
+            if streams == 1 {
+                decode_literal_stream(payload, table, &mut out)?;
+            } else {
+                decode_four_literal_streams(payload, table, &mut out)?;
+            }
 
             Ok((out, header_len + compressed))
         }
@@ -380,16 +382,14 @@ fn parse_compressed_literals_header(body: &[u8], format: u8) -> Result<(usize, u
     Ok((regenerated, compressed, streams, need))
 }
 
-fn decode_literal_stream(data: &[u8], table: &huffman::Table, count: usize) -> Result<Vec<u8>> {
+fn decode_literal_stream(data: &[u8], table: &huffman::Table, out: &mut [u8]) -> Result<()> {
     let mut bits = bits::BackwardBits::new(data)?;
-    let mut out = Vec::with_capacity(count);
-    for _ in 0..count {
-        out.push(table.decode(&mut bits));
-    }
-    Ok(out)
+    table.decode_into(&mut bits, out);
+    Ok(())
 }
 
-fn decode_four_literal_streams(data: &[u8], table: &huffman::Table, count: usize) -> Result<Vec<u8>> {
+fn decode_four_literal_streams(data: &[u8], table: &huffman::Table, out: &mut [u8]) -> Result<()> {
+    let count = out.len();
     let jump = data.get(..6).ok_or_else(|| Error::malformed("zstd four-stream literals have no jump table"))?;
     let first = u16::from_le_bytes([jump[0], jump[1]]) as usize;
     let second = u16::from_le_bytes([jump[2], jump[3]]) as usize;
@@ -399,16 +399,44 @@ fn decode_four_literal_streams(data: &[u8], table: &huffman::Table, count: usize
     let fourth = body.len().checked_sub(first + second + third).ok_or_else(|| Error::malformed("zstd literal stream sizes exceed the section"))?;
 
     let per_stream = count.div_ceil(4);
-    let mut out = Vec::with_capacity(count);
-    let mut offset = 0usize;
-
-    for (index, size) in [first, second, third, fourth].into_iter().enumerate() {
-        let slice = body.get(offset..offset + size).ok_or_else(|| Error::malformed("zstd literal stream runs past the section"))?;
-        offset += size;
-
-        let wanted = if index == 3 { count - per_stream * 3 } else { per_stream };
-        out.extend_from_slice(&decode_literal_stream(slice, table, wanted)?);
+    if per_stream * 3 > count {
+        return Err(Error::malformed("zstd four-stream literals declare fewer bytes than their streams hold"));
     }
 
-    Ok(out)
+    let mut slices = [[].as_slice(); 4];
+    let mut offset = 0usize;
+    for (slot, size) in slices.iter_mut().zip([first, second, third, fourth]) {
+        *slot = body.get(offset..offset + size).ok_or_else(|| Error::malformed("zstd literal stream runs past the section"))?;
+        offset += size;
+    }
+
+    let mut readers =
+        [bits::BackwardBits::new(slices[0])?, bits::BackwardBits::new(slices[1])?, bits::BackwardBits::new(slices[2])?, bits::BackwardBits::new(slices[3])?];
+
+    let last = count - per_stream * 3;
+    let decoder = table.decoder();
+    let (head, tail) = out.split_at_mut(per_stream * 3);
+    let mut quarters = head.chunks_exact_mut(per_stream);
+    let first_three: [&mut [u8]; 3] = [quarters.next().unwrap(), quarters.next().unwrap(), quarters.next().unwrap()];
+    let [one, two, three] = first_three;
+
+    let shared = last.min(per_stream);
+    for at in 0..shared {
+        one[at] = decoder.next(&mut readers[0]);
+        two[at] = decoder.next(&mut readers[1]);
+        three[at] = decoder.next(&mut readers[2]);
+        tail[at] = decoder.next(&mut readers[3]);
+    }
+
+    for at in shared..per_stream {
+        one[at] = decoder.next(&mut readers[0]);
+        two[at] = decoder.next(&mut readers[1]);
+        three[at] = decoder.next(&mut readers[2]);
+    }
+
+    for at in shared..last {
+        tail[at] = decoder.next(&mut readers[3]);
+    }
+
+    Ok(())
 }

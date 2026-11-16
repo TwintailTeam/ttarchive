@@ -74,6 +74,15 @@ impl Window {
         self.total += 1;
     }
 
+    pub fn reserve(&mut self, extra: usize) {
+        self.buf.reserve(extra);
+    }
+
+    pub fn repeat(&mut self, byte: u8, count: usize) {
+        self.buf.resize(self.buf.len() + count, byte);
+        self.total += count as u64;
+    }
+
     pub fn extend(&mut self, data: &[u8]) {
         self.buf.extend_from_slice(data);
         self.total += data.len() as u64;
@@ -108,18 +117,19 @@ impl Window {
         }
 
         let len = len as usize;
-        self.buf.reserve(len);
+        let start = self.buf.len() - distance;
 
         if distance >= len {
-            let start = self.buf.len() - distance;
             self.buf.extend_from_within(start..start + len);
+        } else if distance == 1 {
+            let byte = self.buf[start];
+            self.buf.resize(self.buf.len() + len, byte);
         } else {
-            let mut copied = 0usize;
-            while copied < len {
-                let take = distance.min(len - copied);
-                let start = self.buf.len() - distance;
+            let mut produced = 0usize;
+            while produced < len {
+                let take = (distance + produced).min(len - produced);
                 self.buf.extend_from_within(start..start + take);
-                copied += take;
+                produced += take;
             }
         }
 
