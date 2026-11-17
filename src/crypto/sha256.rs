@@ -79,6 +79,35 @@ impl Sha256 {
     }
 
     fn compress(&mut self, block: &[u8; BLOCK_LEN]) {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+        if crate::crypto::sha_ni::sha256_available() {
+            crate::crypto::sha_ni::sha256_block(&mut self.state, block);
+            return;
+        }
+
+        software_block(&mut self.state, block);
+    }
+}
+
+pub(crate) fn schedule(block: &[u8; BLOCK_LEN]) -> [u32; 64] {
+    let mut w = [0u32; 64];
+    for (slot, chunk) in w[..16].iter_mut().zip(block.chunks_exact(4)) {
+        *slot = u32::from_be_bytes(chunk.try_into().expect("four bytes"));
+    }
+    for i in 16..64 {
+        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+    }
+    w
+}
+
+pub(crate) fn constants() -> &'static [u32; 64] {
+    &K
+}
+
+pub fn software_block(state: &mut [u32; 8], block: &[u8; BLOCK_LEN]) {
+    {
         let mut w = [0u32; 64];
         for (slot, chunk) in w[..16].iter_mut().zip(block.chunks_exact(4)) {
             *slot = u32::from_be_bytes(chunk.try_into().expect("four bytes"));
@@ -89,7 +118,7 @@ impl Sha256 {
             w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
         }
 
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
 
         for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
@@ -109,7 +138,7 @@ impl Sha256 {
             a = t1.wrapping_add(t2);
         }
 
-        for (slot, value) in self.state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+        for (slot, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
             *slot = slot.wrapping_add(value);
         }
     }

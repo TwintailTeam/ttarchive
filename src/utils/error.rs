@@ -60,6 +60,9 @@ pub enum Error {
     /// A worker thread panicked, so the result cannot be trusted.
     WorkerPanic,
 
+    /// The caller asked for the work to stop through its cancel flag.
+    Cancelled,
+
     /// An entry is encrypted and no password was given.
     PasswordRequired {
         /// The entry that needs one.
@@ -146,6 +149,7 @@ impl fmt::Display for Error {
                 write!(f, "could not determine archive format")
             }
             Error::WorkerPanic => write!(f, "a worker thread panicked"),
+            Error::Cancelled => write!(f, "cancelled"),
             Error::PasswordRequired { entry } => {
                 write!(f, "entry {entry:?} is encrypted; a password is required")
             }

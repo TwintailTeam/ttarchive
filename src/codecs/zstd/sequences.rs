@@ -145,7 +145,7 @@ pub fn execute(data: &[u8], literals: &[u8], target: &mut Target<'_>, tables: &m
         let literal_code = literal_state.symbol(literal_table) as usize;
 
         if offset_code > 31 || match_code >= MATCH_LENGTH_BASE.len() || literal_code >= LITERAL_LENGTH_BASE.len() {
-            return Err(Error::malformed("zstd sequence names a symbol outside its alphabet"));
+            return Err(outside_alphabet());
         }
 
         let raw_offset = (1u64 << offset_code) + bits.bits(offset_code);
@@ -214,27 +214,48 @@ fn resolve_offset(raw: u64, literal_length: u64, repeats: &mut [u32; 3]) -> Resu
     Ok(distance as usize)
 }
 
+#[cold]
+fn reaches_back(distance: usize, produced: usize) -> Error {
+    Error::malformed(format!("zstd match reaches {distance} bytes back, past the {produced} produced in this frame"))
+}
+
+#[cold]
+fn past_window(distance: usize, window_size: u64) -> Error {
+    Error::malformed(format!("zstd match distance {distance} exceeds the {window_size} byte window the frame declared"))
+}
+
+#[cold]
+fn short_of_literals() -> Error {
+    Error::malformed("zstd sequence wants more literals than the block holds")
+}
+
+#[cold]
+fn outside_alphabet() -> Error {
+    Error::malformed("zstd sequence names a symbol outside its alphabet")
+}
+
 struct Piece {
     literal_length: usize,
     distance: usize,
     match_length: usize,
 }
 
+#[inline]
 fn emit(out: &mut Window, literals: &[u8], literal_pos: &mut usize, piece: &Piece, window_size: u64) -> Result<()> {
     let Piece { literal_length, distance, match_length } = *piece;
     let end = literal_pos.checked_add(literal_length).filter(|&e| e <= literals.len());
-    let end = end.ok_or_else(|| Error::malformed("zstd sequence wants more literals than the block holds"))?;
+    let end = end.ok_or_else(short_of_literals)?;
     if literal_length > 0 {
-        out.extend(&literals[*literal_pos..end]);
+        out.extend_padded(&literals[*literal_pos..], literal_length);
         *literal_pos = end;
     }
 
     let produced = out.history();
     if distance > produced {
-        return Err(Error::malformed(format!("zstd match reaches {distance} bytes back, past the {produced} produced in this frame")));
+        return Err(reaches_back(distance, produced));
     }
     if window_size > 0 && distance as u64 > window_size {
-        return Err(Error::malformed(format!("zstd match distance {distance} exceeds the declared window")));
+        return Err(past_window(distance, window_size));
     }
 
     out.copy_match(distance as u32, match_length as u32)

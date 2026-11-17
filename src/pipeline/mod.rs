@@ -7,7 +7,8 @@ pub mod sevenz;
 pub mod tarball;
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::codecs::Level;
 use crate::crypto::{Encryption, Password};
@@ -152,6 +153,14 @@ pub struct ExtractOptions {
     /// Without it, encrypted entries fail with
     /// [`crate::Error::PasswordRequired`].
     pub password: Option<Password>,
+
+    /// Stop the extraction when this turns true.
+    ///
+    /// Checked before each entry and while copying one, so a long extraction
+    /// gives up within one buffer rather than at the end. What was already
+    /// written stays on disk, and the call returns
+    /// [`crate::Error::Cancelled`].
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for ExtractOptions {
@@ -169,6 +178,7 @@ impl Default for ExtractOptions {
             strip_root: false,
             selection: Vec::new(),
             password: None,
+            cancel: None,
         }
     }
 }
@@ -372,6 +382,29 @@ impl Restore {
                 meta.group.as_deref().and_then(|name| self.accounts.group_id(name)).or(meta.gid),
             ),
         }
+    }
+}
+
+pub(crate) struct Stopper {
+    flag: Option<Arc<AtomicBool>>,
+}
+
+impl Stopper {
+    pub(crate) fn new(options: &ExtractOptions) -> Self {
+        Stopper { flag: options.cancel.clone() }
+    }
+
+    #[inline]
+    pub(crate) fn asked_to_stop(&self) -> bool {
+        self.flag.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+
+    #[inline]
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.asked_to_stop() {
+            return Err(crate::utils::error::Error::Cancelled);
+        }
+        Ok(())
     }
 }
 

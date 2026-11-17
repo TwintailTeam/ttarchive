@@ -3,7 +3,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::pipeline::layout::{self, Claim, Claims, Rejected, create_directory, should_write};
-use crate::pipeline::{ExtractOptions, ExtractSummary, Restore, UnsafeEntries, pool, thread_count};
+use crate::pipeline::{ExtractOptions, ExtractSummary, Restore, Stopper, UnsafeEntries, pool, thread_count};
 use crate::platform::{EntryKind, EntryMeta, policy, sys};
 use crate::utils::error::{Error, PathRejection, Result};
 use crate::utils::io::COPY_BUF;
@@ -22,6 +22,7 @@ struct Planned {
 
 pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: &Reporter) -> Result<ExtractSummary> {
     let restore = Restore::new(options);
+    let stopper = Stopper::new(options);
     let volumes = VolumeSet::discover(archive)?;
     let mut reader = ZipReader::with_layout(volumes.open()?, volumes.layout().clone())?;
 
@@ -60,6 +61,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
 
     pool::for_each(files.len(), threads, open, |(source, buffer), index| {
         let item = files[index];
+        stopper.check()?;
         let target = root.join(&item.path);
 
         if !should_write(&target, options.overwrite)? {
@@ -93,6 +95,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
         let mut buffer = vec![0u8; COPY_BUF];
 
         for item in plan.iter().filter(|p| p.kind == EntryKind::Symlink) {
+            stopper.check()?;
             let target_path = root.join(&item.path);
 
             let mut link_bytes = Vec::new();

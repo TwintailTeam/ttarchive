@@ -56,9 +56,9 @@ fn every_path_agrees_at_every_length() {
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[test]
 fn the_carryless_path_agrees_with_the_table_at_every_length() {
-    use ttarchive::utils::crc64_clmul;
+    use ttarchive::utils::crc64_ni;
 
-    if !crc64_clmul::available() {
+    if !crc64_ni::available() {
         eprintln!("skipping: this cpu has no pclmulqdq");
         return;
     }
@@ -67,17 +67,17 @@ fn the_carryless_path_agrees_with_the_table_at_every_length() {
 
     for len in 0..=4_096 {
         let slice = &data[..len];
-        assert_eq!(crc64_clmul::update(u64::MAX, slice), crc64::sliced(u64::MAX, slice), "carryless disagrees at {len} bytes");
+        assert_eq!(crc64_ni::update(u64::MAX, slice), crc64::sliced(u64::MAX, slice), "carryless disagrees at {len} bytes");
     }
 
     for len in [4_097, 8_191, 8_192, 8_193, 12_345, 16_384, 65_535, 65_536, 69_999] {
         let slice = &data[..len];
-        assert_eq!(crc64_clmul::update(u64::MAX, slice), crc64::sliced(u64::MAX, slice), "carryless disagrees at {len} bytes");
+        assert_eq!(crc64_ni::update(u64::MAX, slice), crc64::sliced(u64::MAX, slice), "carryless disagrees at {len} bytes");
     }
 
     for seed in [1u64, 0xdead_beef, u64::MAX] {
         let slice = &data[..40_000];
-        assert_eq!(crc64_clmul::update(seed, slice), crc64::sliced(seed, slice), "carryless disagrees with seed {seed:#x}");
+        assert_eq!(crc64_ni::update(seed, slice), crc64::sliced(seed, slice), "carryless disagrees with seed {seed:#x}");
     }
 }
 

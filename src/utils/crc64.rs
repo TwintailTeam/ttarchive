@@ -68,8 +68,8 @@ pub fn checksum(data: &[u8]) -> u64 {
 
 fn update(crc: u64, data: &[u8]) -> u64 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if data.len() >= super::crc64_clmul::MIN_BYTES && super::crc64_clmul::available() {
-        return super::crc64_clmul::update(crc, data);
+    if data.len() >= super::crc64_ni::MIN_BYTES && super::crc64_ni::available() {
+        return super::crc64_ni::update(crc, data);
     }
 
     striped(crc, data)

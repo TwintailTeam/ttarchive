@@ -125,6 +125,27 @@ pub fn decompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Decode `input` into `output`, returning how many bytes were written.
+///
+/// The whole stream is decoded, however many frames it holds. Memory is
+/// bounded by the window the frames declare; cap that with
+/// [`Reader::limit_window`] when the stream comes from somewhere you do not
+/// trust.
+pub fn decompress_to<R: Read, W: std::io::Write>(input: R, output: &mut W) -> Result<u64> {
+    let mut reader = Reader::new(input, 0);
+    let mut buffer = vec![0u8; crate::utils::io::COPY_BUF];
+    let mut written = 0u64;
+
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(written);
+        }
+        output.write_all(&buffer[..read])?;
+        written += read as u64;
+    }
+}
+
 struct Open {
     window_size: u64,
     content_size: Option<u64>,
@@ -140,11 +161,32 @@ pub struct Reader<R> {
     window: Window,
     open: Option<Open>,
     finished: bool,
+    allowed_window: u64,
+    scratch: Vec<u8>,
+    produced: u64,
 }
 
 impl<R: Read> Reader<R> {
-    pub fn new(inner: R, _size_hint: u64) -> Self {
-        Reader { inner, window: Window::new(1 << 20), open: None, finished: false }
+    pub fn new(inner: R, size_hint: u64) -> Self {
+        let mut window = Window::new(1 << 20);
+        window.reserve(crate::utils::limits::prealloc(size_hint));
+
+        Reader { inner, window, open: None, finished: false, allowed_window: MAX_WINDOW, scratch: Vec::new(), produced: 0 }
+    }
+
+    /// Refuse any frame that declares a window larger than `bytes`.
+    ///
+    /// A zstd frame header names the window its matches reach back over, and a
+    /// decoder has to hold that much. The default ceiling is 2 GiB, which the
+    /// format allows; lower it for streams you did not write yourself.
+    pub fn limit_window(mut self, bytes: u64) -> Self {
+        self.allowed_window = bytes.min(MAX_WINDOW);
+        self
+    }
+
+    /// How many bytes this reader has produced so far.
+    pub fn produced(&self) -> u64 {
+        self.produced
     }
 
     fn exactly(&mut self, buf: &mut [u8]) -> Result<bool> {
@@ -201,6 +243,12 @@ impl<R: Read> Reader<R> {
         }
 
         let parsed = FrameHeader::parse(&header)?;
+        if parsed.window_size > self.allowed_window {
+            return Err(Error::malformed(format!(
+                "zstd frame declares a {} byte window, past the {} this reader allows",
+                parsed.window_size, self.allowed_window
+            )));
+        }
         let window_size = if parsed.window_size == 0 { 1 << 20 } else { parsed.window_size };
 
         self.window.reset_dictionary();
@@ -233,21 +281,32 @@ impl<R: Read> Reader<R> {
         if stored > MAX_BLOCK {
             return Err(Error::malformed(format!("zstd block claims {stored} bytes, past the format's limit")));
         }
-        let mut body = vec![0u8; stored];
-        if stored > 0 && !self.exactly(&mut body)? {
+
+        let mut body = std::mem::take(&mut self.scratch);
+        body.clear();
+        body.resize(stored, 0);
+        let filled = stored == 0 || self.exactly(&mut body)?;
+        if !filled {
+            self.scratch = body;
             return Err(Error::malformed("zstd block ends before the bytes it declares"));
         }
 
+        let outcome = self.decode_block(kind, size, &body, last);
+        self.scratch = body;
+        outcome
+    }
+
+    fn decode_block(&mut self, kind: u32, size: usize, body: &[u8], last: bool) -> Result<()> {
         let open = self.open.as_mut().expect("a frame is open");
         let window_size = open.window_size;
 
         match kind {
-            0 => self.window.extend(&body),
+            0 => self.window.extend(body),
             1 => {
                 let byte = *body.first().ok_or_else(|| Error::malformed("zstd RLE block has no byte"))?;
                 self.window.repeat(byte, size);
             }
-            2 => decode_compressed_block(&body, &mut self.window, &mut open.frame, window_size)?,
+            2 => decode_compressed_block(body, &mut self.window, &mut open.frame, window_size)?,
             _ => return Err(Error::malformed("zstd block uses the reserved type 3")),
         }
 
@@ -294,7 +353,9 @@ impl<R: Read> Read for Reader<R> {
             self.window.drain();
             self.step()?;
         }
-        Ok(self.window.take(buf))
+        let taken = self.window.take(buf);
+        self.produced += taken as u64;
+        Ok(taken)
     }
 }
 

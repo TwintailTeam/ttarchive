@@ -79,3 +79,64 @@ fn lengths_around_every_block_boundary_are_padded_correctly() {
         assert_eq!(sha_stream.finish(), sha512::digest(slice), "sha512 in sevens at {len} bytes");
     }
 }
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+#[test]
+fn the_hardware_sha_paths_agree_with_the_software_ones() {
+    use ttarchive::crypto::{sha_ni, sha1, sha256};
+
+    let sha256_hardware = sha_ni::sha256_available();
+    let sha1_hardware = sha_ni::sha1_available();
+
+    if !sha256_hardware && !sha1_hardware {
+        eprintln!("skipping: this cpu offers no sha extensions, so only the software paths ran");
+        return;
+    }
+
+    let data = pattern(100_000, 0xfeed);
+    for len in [0usize, 1, 55, 56, 63, 64, 65, 127, 128, 129, 1_000, 65_536, 100_000] {
+        let slice = &data[..len];
+        assert_eq!(hex(&sha256::digest(slice)), hex(&software_sha256(slice)), "sha256 hardware disagrees at {len} bytes");
+        assert_eq!(hex(&sha1::digest(slice)), hex(&software_sha1(slice)), "sha1 hardware disagrees at {len} bytes");
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+fn software_sha256(data: &[u8]) -> [u8; 32] {
+    let mut state = [0x6a09_e667u32, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a, 0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19];
+    let padded = pad_be(data, 64, 8);
+    for block in padded.chunks_exact(64) {
+        ttarchive::crypto::sha256::software_block(&mut state, block.try_into().unwrap());
+    }
+    let mut out = [0u8; 32];
+    for (slot, word) in out.chunks_exact_mut(4).zip(state) {
+        slot.copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+fn software_sha1(data: &[u8]) -> [u8; 20] {
+    let mut state = [0x6745_2301u32, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476, 0xc3d2_e1f0];
+    let padded = pad_be(data, 64, 8);
+    for block in padded.chunks_exact(64) {
+        ttarchive::crypto::sha1::software_block(&mut state, block.try_into().unwrap());
+    }
+    let mut out = [0u8; 20];
+    for (slot, word) in out.chunks_exact_mut(4).zip(state) {
+        slot.copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+fn pad_be(data: &[u8], block: usize, length_bytes: usize) -> Vec<u8> {
+    let mut out = data.to_vec();
+    out.push(0x80);
+    while (out.len() + length_bytes) % block != 0 {
+        out.push(0);
+    }
+    let bits = (data.len() as u64).wrapping_mul(8);
+    out.extend_from_slice(&bits.to_be_bytes()[8 - length_bytes.min(8)..]);
+    out
+}

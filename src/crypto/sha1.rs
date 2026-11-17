@@ -79,12 +79,35 @@ impl Sha1 {
     }
 
     fn compress(&mut self, block: &[u8; BLOCK_LEN]) {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+        if crate::crypto::sha_ni::sha1_available() {
+            crate::crypto::sha_ni::sha1_block(&mut self.state, block);
+            return;
+        }
+
+        software_block(&mut self.state, block);
+    }
+}
+
+pub(crate) fn schedule(block: &[u8; BLOCK_LEN]) -> [u32; 80] {
+    let mut w = [0u32; 80];
+    for (slot, chunk) in w[..16].iter_mut().zip(block.chunks_exact(4)) {
+        *slot = u32::from_be_bytes(chunk.try_into().expect("four bytes"));
+    }
+    for i in 16..80 {
+        w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+    }
+    w
+}
+
+pub fn software_block(state: &mut [u32; 5], block: &[u8; BLOCK_LEN]) {
+    {
         let mut w = [0u32; 16];
         for (i, slot) in w.iter_mut().enumerate() {
             *slot = u32::from_be_bytes([block[i * 4], block[i * 4 + 1], block[i * 4 + 2], block[i * 4 + 3]]);
         }
 
-        let [mut a, mut b, mut c, mut d, mut e] = self.state;
+        let [mut a, mut b, mut c, mut d, mut e] = *state;
 
         #[inline(always)]
         fn extend(w: &mut [u32; 16], i: usize) -> u32 {
@@ -124,11 +147,11 @@ impl Sha1 {
             round!(b ^ c ^ d, 0xCA62_C1D6, word);
         }
 
-        self.state[0] = self.state[0].wrapping_add(a);
-        self.state[1] = self.state[1].wrapping_add(b);
-        self.state[2] = self.state[2].wrapping_add(c);
-        self.state[3] = self.state[3].wrapping_add(d);
-        self.state[4] = self.state[4].wrapping_add(e);
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
     }
 }
 

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::codecs::{Level, bzip2, compress, gzip, lzip, lzma, xz, zstd};
 use crate::pipeline::layout::{self, Claim, Claims, Rejected};
-use crate::pipeline::{CreateOptions, CreateSummary, ExtractOptions, ExtractSummary, MEMORY_BUDGET, Restore, pool, thread_count};
+use crate::pipeline::{CreateOptions, CreateSummary, ExtractOptions, ExtractSummary, MEMORY_BUDGET, Restore, Stopper, pool, thread_count};
 use crate::platform::accounts::Accounts;
 use crate::platform::{EntryKind, EntryMeta, sys};
 use crate::tar::header::{Format, Kind};
@@ -677,13 +677,21 @@ struct Body {
     target: std::path::PathBuf,
 }
 
-fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &ExtractOptions, restore: &Restore, reporter: &Reporter) -> Result<u64> {
+fn write_bodies(
+    source: &Source,
+    found: &[Scanned],
+    bodies: &[Body],
+    options: &ExtractOptions,
+    restore: &Restore,
+    stopper: &Stopper,
+    reporter: &Reporter,
+) -> Result<u64> {
     if bodies.is_empty() {
         return Ok(0);
     }
 
     let Some(access) = source.random_access() else {
-        return write_bodies_in_order(source, found, bodies, restore, reporter);
+        return write_bodies_in_order(source, found, bodies, restore, stopper, reporter);
     };
 
     let written = std::sync::atomic::AtomicU64::new(0);
@@ -692,6 +700,7 @@ fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &E
 
     pool::for_each(bodies.len(), threads, open, |(input, buffer), slot| {
         let body = &bodies[slot];
+        stopper.check()?;
         let entry = &found[body.index];
 
         reporter.start_entry(&entry.name);
@@ -735,7 +744,7 @@ fn write_bodies(source: &Source, found: &[Scanned], bodies: &[Body], options: &E
     Ok(written.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], restore: &Restore, reporter: &Reporter) -> Result<u64> {
+fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], restore: &Restore, stopper: &Stopper, reporter: &Reporter) -> Result<u64> {
     let wanted: HashMap<usize, &Body> = bodies.iter().map(|body| (body.index, body)).collect();
 
     let mut reader = TarReader::new(source.reader()?);
@@ -747,6 +756,7 @@ fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], re
         let slot = index;
         index += 1;
 
+        stopper.check()?;
         let Some(body) = wanted.get(&slot) else {
             reader.skip_data(&entry)?;
             continue;
@@ -775,6 +785,7 @@ fn write_bodies_in_order(source: &Source, found: &[Scanned], bodies: &[Body], re
 
 pub fn extract(archive: &Path, dest: &Path, wrapper: Wrapper, options: &ExtractOptions, reporter: &Reporter) -> Result<ExtractSummary> {
     let restore = Restore::new(options);
+    let stopper = Stopper::new(options);
     layout::check_destination(dest)?;
     fs::create_dir_all(dest)?;
     let root = fs::canonicalize(dest)?;
@@ -812,6 +823,7 @@ pub fn extract(archive: &Path, dest: &Path, wrapper: Wrapper, options: &ExtractO
     let mut directories: Vec<(std::path::PathBuf, usize)> = Vec::new();
 
     for (relative, index) in &planned {
+        stopper.check()?;
         let entry = &found[*index];
         let target = root.join(relative);
 
@@ -879,7 +891,7 @@ pub fn extract(archive: &Path, dest: &Path, wrapper: Wrapper, options: &ExtractO
     }
 
     summary.files += bodies.len() as u64;
-    summary.bytes += write_bodies(&source, &found, &bodies, options, &restore, reporter)?;
+    summary.bytes += write_bodies(&source, &found, &bodies, options, &restore, &stopper, reporter)?;
 
     for (relative, link_target) in pending_links {
         let path = root.join(&relative);

@@ -463,6 +463,16 @@ impl Archive {
         self
     }
 
+    /// Stop an extraction when `flag` turns true.
+    ///
+    /// The flag is read before each entry and while copying one, so the call
+    /// returns [`Error::Cancelled`] promptly. Files already written are left
+    /// where they are; nothing is rolled back.
+    pub fn with_cancel(mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.extract_options.cancel = Some(flag);
+        self
+    }
+
     /// Use these extraction options, replacing anything set so far.
     pub fn with_extract_options(mut self, options: ExtractOptions) -> Self {
         self.extract_options = options;
@@ -516,6 +526,31 @@ impl Archive {
                 let reader = zip::ZipReader::with_layout(volumes.open()?, volumes.layout().clone())?;
                 Ok(reader.entries().to_vec())
             }
+        }
+    }
+
+    /// How many bytes the archive holds once unpacked.
+    ///
+    /// The sum of every entry's uncompressed size, which is what
+    /// [`ExtractSummary::bytes`] reports after the fact. Reading it costs one
+    /// pass over the archive's index, so progress can be scaled from the first
+    /// tick. Directories and links count as the zero bytes they hold.
+    pub fn unpacked_size(&self) -> Result<u64> {
+        Ok(self.entries()?.iter().filter(|entry| entry.is_file()).map(|entry| entry.size).sum())
+    }
+
+    /// Every file this archive is spread across, in order.
+    ///
+    /// One path for an ordinary archive. A split ZIP gives its `.z01`, `.z02`
+    /// pieces with the plain `.zip` last; a split 7z gives `.7z.001` onwards.
+    /// Pass any piece, or the base name, and the rest are found from there.
+    pub fn volumes(&self) -> Result<Vec<PathBuf>> {
+        let kind = self.resolve_for_read()?;
+
+        match kind.dispatch() {
+            Dispatch::Zip => Ok(zip::VolumeSet::discover(&self.path)?.paths().to_vec()),
+            Dispatch::SevenZ => Ok(sevenz::SevenZReader::open(&self.path)?.volumes()),
+            Dispatch::Tarball(_) => Ok(vec![self.path.clone()]),
         }
     }
 

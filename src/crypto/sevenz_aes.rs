@@ -133,6 +133,55 @@ pub fn cbc_encrypt(plain: &[u8], key: &[u8], iv: [u8; BLOCK_SIZE]) -> Result<Vec
     Ok(out)
 }
 
+/// Decrypt AES-CBC, returning every byte the blocks hold.
+///
+/// Nothing is stripped: 7z pads the last block with zeros and records the real
+/// size elsewhere, so that is the caller's to apply. Use
+/// [`cbc_decrypt_pkcs7`] for data that carries PKCS#7 padding instead.
+pub fn cbc_decrypt(data: &[u8], key: &[u8], iv: [u8; BLOCK_SIZE]) -> Result<Vec<u8>> {
+    if data.len() % BLOCK_SIZE != 0 {
+        return Err(Error::malformed(format!("AES-CBC was handed {} bytes, which is not whole blocks", data.len())));
+    }
+
+    let mut cipher = CbcDecrypt::new(key, iv).ok_or_else(|| Error::malformed(format!("7zAES was handed a {} byte key", key.len())))?;
+    let mut out = data.to_vec();
+    cipher.apply(&mut out);
+    Ok(out)
+}
+
+/// Decrypt AES-CBC and remove the PKCS#7 padding its last block carries.
+///
+/// Fails when the padding byte is zero, longer than a block, or not repeated
+/// the number of times it claims, which is what a wrong key usually looks
+/// like.
+pub fn cbc_decrypt_pkcs7(data: &[u8], key: &[u8], iv: [u8; BLOCK_SIZE]) -> Result<Vec<u8>> {
+    let mut plain = cbc_decrypt(data, key, iv)?;
+
+    let padding = *plain.last().ok_or_else(|| Error::malformed("AES-CBC with PKCS#7 padding cannot be empty"))? as usize;
+    if padding == 0 || padding > BLOCK_SIZE || padding > plain.len() {
+        return Err(Error::malformed(format!("PKCS#7 padding claims {padding} bytes")));
+    }
+    if plain[plain.len() - padding..].iter().any(|&byte| byte as usize != padding) {
+        return Err(Error::malformed("PKCS#7 padding is not the same byte throughout"));
+    }
+
+    plain.truncate(plain.len() - padding);
+    Ok(plain)
+}
+
+/// Encrypt AES-CBC with PKCS#7 padding, which [`cbc_decrypt_pkcs7`] undoes.
+///
+/// A whole block of padding is added when the input already fills its last
+/// block, as the scheme requires.
+pub fn cbc_encrypt_pkcs7(plain: &[u8], key: &[u8], iv: [u8; BLOCK_SIZE]) -> Result<Vec<u8>> {
+    let padding = BLOCK_SIZE - (plain.len() % BLOCK_SIZE);
+    let mut padded = Vec::with_capacity(plain.len() + padding);
+    padded.extend_from_slice(plain);
+    padded.resize(plain.len() + padding, padding as u8);
+
+    cbc_encrypt(&padded, key, iv)
+}
+
 pub struct CbcDecryptReader<R> {
     inner: R,
     cipher: CbcDecrypt,

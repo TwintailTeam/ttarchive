@@ -151,12 +151,12 @@ impl State {
         State { value: bits.bits(table.log) as usize }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn symbol(&self, table: &Table) -> u8 {
         table.entries[self.value].symbol
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn advance(&mut self, table: &Table, bits: &mut BackwardBits<'_>) {
         let entry = table.entries[self.value];
         let extra = bits.bits(entry.bits as u32) as usize;

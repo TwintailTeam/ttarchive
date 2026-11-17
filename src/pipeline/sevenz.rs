@@ -8,7 +8,7 @@ use crate::codecs::Method;
 use crate::crypto::{Encryption, Password};
 use crate::pipeline::entry::{Entry, EntryDetail, SevenZDetail};
 use crate::pipeline::layout::{self, Claim, Claims, Rejected, create_directory, should_write};
-use crate::pipeline::{CreateOptions, CreateSummary, ExtractOptions, ExtractSummary, Overwrite, Restore, UnsafeEntries, create, pool, thread_count};
+use crate::pipeline::{CreateOptions, CreateSummary, ExtractOptions, ExtractSummary, Overwrite, Restore, Stopper, UnsafeEntries, create, pool, thread_count};
 use crate::platform::{EntryKind, EntryMeta, mode, policy, sys};
 use crate::sevenz::SevenZReader;
 use crate::sevenz::header::FileEntry;
@@ -80,6 +80,7 @@ struct Planned {
 
 pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: &Reporter) -> Result<ExtractSummary> {
     let restore = Restore::new(options);
+    let stopper = Stopper::new(options);
     let reader = SevenZReader::open_with(archive, options.password.clone())?;
 
     let (plan, anti, rejected, specials) = build_plan(&reader, dest, options)?;
@@ -106,6 +107,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
     }
 
     for item in plan.iter().filter(|p| p.kind == EntryKind::File && p.location.is_none()) {
+        stopper.check()?;
         let target = root.join(&item.path);
         if should_write(&target, options.overwrite)? {
             crate::utils::io::create(&target)?;
@@ -134,6 +136,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
             let mut at = 0u64;
 
             for &slot in slots {
+                stopper.check()?;
                 let item = &plan[slot];
                 let location = item.location.as_ref().expect("a grouped entry owns bytes");
 
@@ -185,6 +188,7 @@ pub fn extract(archive: &Path, dest: &Path, options: &ExtractOptions, reporter: 
     links.sort_by_key(|(slot, _)| *slot);
 
     for (slot, link_target) in links {
+        stopper.check()?;
         let item = &plan[slot];
         let target_path = root.join(&item.path);
 

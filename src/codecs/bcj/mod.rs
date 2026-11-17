@@ -105,9 +105,6 @@ impl Converter {
                 Way::Encode => work[at].wrapping_sub(previous),
             };
 
-            // The encoder's own output is not what the next byte looks back at:
-            // it subtracts from the bytes as they arrived, so the history it
-            // keeps has to be the input rather than the output.
             if self.way == Way::Encode {
                 let restored = work[at].wrapping_add(previous);
                 data[at - offset] = work[at];
